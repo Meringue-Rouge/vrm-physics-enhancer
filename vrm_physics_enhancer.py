@@ -1,3 +1,7 @@
+import bpy
+from mathutils import Vector
+import math
+
 bl_info = {
     "name": "VRM Physics Enhancer",
     "blender": (3, 0, 0),
@@ -5,12 +9,66 @@ bl_info = {
     "author": "Meringue Rouge",
     "version": (1, 0),
     "location": "View3D > Sidebar > VRM Physics Enhancer",
-    "description": "Adds physics colliders for breasts, long hair, and arms/hands to VRM models",
+    "description": "Adds physics colliders and jiggle bones to VRM models",
     "warning": "",
     "doc_url": "",
 }
 
-import bpy
+# Define scene properties for Jiggle Bones parameters
+bpy.types.Scene.vrm_jiggle_bone_pair = bpy.props.EnumProperty(
+    name="Bone Pair",
+    description="Select the bone pair or single bone to apply jiggle physics to",
+    items=[
+        ('UPPER_LEG', "Upper Leg", "J_Bip_L_UpperLeg and J_Bip_R_UpperLeg"),
+        ('LOWER_LEG', "Lower Leg", "J_Bip_L_LowerLeg and J_Bip_R_LowerLeg"),
+        ('SPINE', "Spine", "J_Bip_C_Spine"),
+        ('BUST', "Bust", "J_Bip_L_Bust and J_Bip_R_Bust"),
+        ('CHEST', "Chest", "J_Bip_C_Chest"),
+        ('UPPER_ARM', "Upper Arm", "J_Bip_L_UpperArm and J_Bip_R_UpperArm"),
+        ('LOWER_ARM', "Lower Arm", "J_Bip_L_LowerArm and J_Bip_R_LowerArm"),
+    ],
+    default='UPPER_LEG'
+)
+
+bpy.types.Scene.vrm_jiggle_bone_quantity = bpy.props.IntProperty(
+    name="Bone Quantity",
+    description="Number of jiggle bone chains per bone",
+    default=4,
+    min=1,
+    max=100
+)
+
+bpy.types.Scene.vrm_jiggle_affect_radius = bpy.props.FloatProperty(
+    name="Affect Radius",
+    description="Radius for vertex selection",
+    default=0.1,
+    min=0.01,
+    max=1.0
+)
+
+bpy.types.Scene.vrm_jiggle_stiffness = bpy.props.FloatProperty(
+    name="Stiffness",
+    description="Stiffness for all joints",
+    default=1.0,
+    min=0.0,
+    max=10.0
+)
+
+bpy.types.Scene.vrm_jiggle_drag_force_first = bpy.props.FloatProperty(
+    name="Drag Force (First Two Joints)",
+    description="Drag force for the first two joints in each chain",
+    default=0.05,
+    min=0.0,
+    max=1.0
+)
+
+bpy.types.Scene.vrm_jiggle_drag_force_end = bpy.props.FloatProperty(
+    name="Drag Force (End Joint)",
+    description="Drag force for the third joint in each chain",
+    default=0.5,
+    min=0.0,
+    max=1.0
+)
 
 class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
     """Adds breast physics colliders to VRM models"""
@@ -47,11 +105,9 @@ class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
 
             self.report({'INFO'}, "Breast physics colliders added successfully")
             return {'FINISHED'}
-
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
             return {'CANCELLED'}
-
 
 class VRM_OT_Add_Long_Hair_Collider(bpy.types.Operator):
     """Adds a long hair body penetration prevention collider"""
@@ -83,11 +139,9 @@ class VRM_OT_Add_Long_Hair_Collider(bpy.types.Operator):
 
             self.report({'INFO'}, "Long Hair Body Penetration Prevention added successfully")
             return {'FINISHED'}
-
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
             return {'CANCELLED'}
-
 
 class VRM_OT_Add_Arm_Hand_Colliders(bpy.types.Operator):
     """Adds arm and hand colliders for physics interactions"""
@@ -140,11 +194,179 @@ class VRM_OT_Add_Arm_Hand_Colliders(bpy.types.Operator):
 
             self.report({'INFO'}, "Arms and hand colliders added successfully")
             return {'FINISHED'}
-
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
             return {'CANCELLED'}
 
+class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
+    """Adds jiggle bone chains to selected bones for VRM models and assigns vertex groups"""
+    bl_idname = "vrm.add_jiggle_bones"
+    bl_label = "Add Jiggle Bones"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'BONE_DATA'
+
+    def execute(self, context):
+        try:
+            # Retrieve scene properties
+            bone_pair = context.scene.vrm_jiggle_bone_pair
+            bone_quantity = context.scene.vrm_jiggle_bone_quantity
+            affect_radius = context.scene.vrm_jiggle_affect_radius
+            stiffness = context.scene.vrm_jiggle_stiffness
+            drag_force_first = context.scene.vrm_jiggle_drag_force_first
+            drag_force_end = context.scene.vrm_jiggle_drag_force_end
+
+            # Define bone pairs based on selection
+            bone_pairs = {
+                'UPPER_LEG': ["J_Bip_L_UpperLeg", "J_Bip_R_UpperLeg"],
+                'LOWER_LEG': ["J_Bip_L_LowerLeg", "J_Bip_R_LowerLeg"],
+                'SPINE': ["J_Bip_C_Spine"],
+                'BUST': ["J_Bip_L_Bust", "J_Bip_R_Bust"],
+                'CHEST': ["J_Bip_C_Chest"],
+                'UPPER_ARM': ["J_Bip_L_UpperArm", "J_Bip_R_UpperArm"],
+                'LOWER_ARM': ["J_Bip_L_LowerArm", "J_Bip_R_LowerArm"],
+            }
+            selected_bones = bone_pairs.get(bone_pair, ["J_Bip_L_UpperLeg", "J_Bip_R_UpperLeg"])
+
+            # Find the armature and mesh
+            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
+            mesh = next(obj for obj in armature.children if obj.type == 'MESH')  # Assuming mesh is a child of the armature
+
+            # Set active object to armature and enter edit mode
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode='EDIT')
+
+            # Access edit bones
+            edit_bones = armature.data.edit_bones
+            jiggle_length = 0.05  # Length of each jiggle bone segment
+
+            # Create jiggle bone chains for each selected bone
+            jiggle_bone_positions = {}  # Store first bone names and their head positions
+            jiggle_bone_chains = {}  # Store bone chains for spring joints
+            for bone_name in selected_bones:
+                if bone_name not in edit_bones:
+                    self.report({'WARNING'}, f"Bone {bone_name} not found in armature")
+                    continue
+                bone = edit_bones[bone_name]
+                matrix = bone.matrix
+                length = bone.length
+                midpoint_local = Vector((0, length / 2, 0))
+                midpoint_world = matrix @ midpoint_local
+
+                # Generate directions based on bone_quantity
+                directions = []
+                for i in range(bone_quantity):
+                    angle = 2 * math.pi * i / bone_quantity
+                    direction = Vector((math.cos(angle), 0, math.sin(angle)))  # Around Y-axis
+                    directions.append(direction)
+
+                # Create bone chains for each direction
+                for i, direction in enumerate(directions):
+                    head_local = midpoint_local + 0.05 * direction  # Radius is fixed to 0.05
+                    head_world = matrix @ head_local
+                    direction_world = matrix.to_3x3() @ direction
+
+                    # Create chain of three bones
+                    chain_bones = []
+                    prev_bone = None
+                    for j in range(3):
+                        bone_suffix = f"_{i+1}" if j == 0 else f"_{i+1}_{j+1}"
+                        new_bone_name = f"Jiggle_{bone_name}{bone_suffix}"
+                        new_bone = edit_bones.new(new_bone_name)
+
+                        if j == 0:
+                            # First bone in chain
+                            new_bone.head = head_world
+                            new_bone.tail = head_world + jiggle_length * direction_world
+                            new_bone.parent = bone
+                            jiggle_bone_positions[new_bone_name] = armature.matrix_world @ head_world
+                        else:
+                            # Subsequent bones in chain
+                            new_bone.head = prev_bone.tail
+                            new_bone.tail = new_bone.head + jiggle_length * direction_world
+                            new_bone.parent = prev_bone
+
+                        chain_bones.append(new_bone_name)
+                        prev_bone = new_bone
+
+                    jiggle_bone_chains[f"Jiggle_{bone_name}_{i+1}"] = chain_bones
+
+            # Switch back to object mode
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            # Add spring physics to jiggle bones
+            sb = armature.data.vrm_addon_extension.spring_bone1
+            for bone_name in selected_bones:
+                for i in range(bone_quantity):
+                    jiggle_bone_name = f"Jiggle_{bone_name}_{i+1}"
+                    if jiggle_bone_name not in armature.data.bones:
+                        self.report({'WARNING'}, f"Jiggle bone {jiggle_bone_name} not created")
+                        continue
+                    if jiggle_bone_name not in jiggle_bone_chains:
+                        self.report({'WARNING'}, f"No chain found for {jiggle_bone_name}")
+                        continue
+                    new_spring = sb.springs.add()
+                    new_spring.vrm_name = f"{jiggle_bone_name}_Spring"
+                    # Add three joints for the bone chain
+                    for j, chain_bone_name in enumerate(jiggle_bone_chains[jiggle_bone_name]):
+                        joint = new_spring.joints.add()
+                        joint.node.bone_name = chain_bone_name
+                        joint.stiffness = stiffness
+                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
+                        joint.drag_force = drag_force_first if j < 2 else drag_force_end
+
+            # Create vertex groups and assign vertices
+            bpy.context.view_layer.objects.active = mesh
+            bpy.ops.object.mode_set(mode='OBJECT')  # Ensure object mode
+            mesh_data = mesh.data
+
+            for jiggle_bone_name, head_pos in jiggle_bone_positions.items():
+                if jiggle_bone_name not in armature.data.bones:
+                    self.report({'WARNING'}, f"Jiggle bone {jiggle_bone_name} not found in armature")
+                    continue
+                # Create vertex group (only for the first bone in the chain)
+                if jiggle_bone_name not in mesh.vertex_groups:
+                    vg = mesh.vertex_groups.new(name=jiggle_bone_name)
+
+                # Determine the parent bone
+                parent_bone = None
+                for bone in selected_bones:
+                    if bone in jiggle_bone_name:
+                        parent_bone = bone
+                        break
+                if not parent_bone:
+                    self.report({'WARNING'}, f"Could not determine parent bone for {jiggle_bone_name}")
+                    continue
+
+                # Get the vertex group for the parent bone
+                parent_vg = mesh.vertex_groups.get(parent_bone)
+                if not parent_vg:
+                    self.report({'WARNING'}, f"Vertex group {parent_bone} not found for {jiggle_bone_name}")
+                    continue
+
+                # Find vertices in the parent bone's vertex group within the affect radius
+                selected_verts = []
+                for v in mesh_data.vertices:
+                    try:
+                        parent_vg.weight(v.index)  # Check if vertex is in group
+                        v_pos = mesh.matrix_world @ v.co
+                        dist = (v_pos - head_pos).length
+                        if dist < affect_radius:
+                            selected_verts.append(v.index)
+                    except RuntimeError:
+                        continue  # Vertex not in parent vertex group
+
+                # Assign vertices to vertex group
+                if selected_verts:
+                    self.report({'INFO'}, f"Selected {len(selected_verts)} vertices for {jiggle_bone_name}")
+                    vg.add(selected_verts, 1.0, 'REPLACE')
+                else:
+                    self.report({'WARNING'}, f"No vertices selected for {jiggle_bone_name} in {parent_bone} group")
+
+            self.report({'INFO'}, f"Jiggle bone chains for {bone_pair.lower().replace('_', ' ')} added successfully")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error: {str(e)}")
+            return {'CANCELLED'}
 
 class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
     """Creates a panel for VRM Physics Enhancer"""
@@ -162,14 +384,34 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         layout.label(text="J_Sec_L_Bust1 Collider or J_Sec_R_Bust1 Collider")
         layout.operator("vrm.add_long_hair_collider", icon='OUTLINER_OB_FORCE_FIELD')
         layout.operator("vrm.add_arm_hand_colliders", icon='VIEW_PAN')
-
+        layout.label(text="Jiggle Bones Parameters:")
+        layout.prop(context.scene, "vrm_jiggle_bone_pair")
+        layout.prop(context.scene, "vrm_jiggle_bone_quantity")
+        layout.prop(context.scene, "vrm_jiggle_affect_radius")
+        layout.prop(context.scene, "vrm_jiggle_stiffness")
+        layout.prop(context.scene, "vrm_jiggle_drag_force_first")
+        layout.prop(context.scene, "vrm_jiggle_drag_force_end")
+        layout.operator("vrm.add_jiggle_bones", icon='BONE_DATA')
 
 def register():
     bpy.utils.register_class(VRM_OT_Add_Breast_Physics_Colliders)
     bpy.utils.register_class(VRM_OT_Add_Long_Hair_Collider)
     bpy.utils.register_class(VRM_OT_Add_Arm_Hand_Colliders)
+    bpy.utils.register_class(VRM_OT_Add_Jiggle_Bones)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
 
+def unregister():
+    bpy.utils.unregister_class(VRM_OT_Add_Breast_Physics_Colliders)
+    bpy.utils.unregister_class(VRM_OT_Add_Long_Hair_Collider)
+    bpy.utils.unregister_class(VRM_OT_Add_Arm_Hand_Colliders)
+    bpy.utils.unregister_class(VRM_OT_Add_Jiggle_Bones)
+    bpy.utils.unregister_class(VRM_PT_Physics_Enhancer_Panel)
+    del bpy.types.Scene.vrm_jiggle_bone_pair
+    del bpy.types.Scene.vrm_jiggle_bone_quantity
+    del bpy.types.Scene.vrm_jiggle_affect_radius
+    del bpy.types.Scene.vrm_jiggle_stiffness
+    del bpy.types.Scene.vrm_jiggle_drag_force_first
+    del bpy.types.Scene.vrm_jiggle_drag_force_end
 
 if __name__ == "__main__":
     register()
