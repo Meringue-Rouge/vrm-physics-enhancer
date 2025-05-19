@@ -49,15 +49,31 @@ bpy.types.Scene.vrm_jiggle_affect_radius = bpy.props.FloatProperty(
 bpy.types.Scene.vrm_jiggle_stiffness = bpy.props.FloatProperty(
     name="Stiffness",
     description="Stiffness for all joints",
-    default=1.0,
+    default=0.5,  # Reduced for softer jiggle
     min=0.0,
     max=10.0
+)
+
+bpy.types.Scene.vrm_jiggle_angular_stiffness = bpy.props.FloatProperty(
+    name="Angular Stiffness",
+    description="Stiffness for angular constraints",
+    default=0.5,
+    min=0.0,
+    max=1.0
+)
+
+bpy.types.Scene.vrm_jiggle_max_angle = bpy.props.FloatProperty(
+    name="Max Angle (Degrees)",
+    description="Maximum rotation angle for jiggle bones",
+    default=30.0,
+    min=0.0,
+    max=90.0
 )
 
 bpy.types.Scene.vrm_jiggle_drag_force_first = bpy.props.FloatProperty(
     name="Drag Force (First Two Joints)",
     description="Drag force for the first two joints in each chain",
-    default=0.05,
+    default=0.2,  # Increased for more damping
     min=0.0,
     max=1.0
 )
@@ -65,9 +81,17 @@ bpy.types.Scene.vrm_jiggle_drag_force_first = bpy.props.FloatProperty(
 bpy.types.Scene.vrm_jiggle_drag_force_end = bpy.props.FloatProperty(
     name="Drag Force (End Joint)",
     description="Drag force for the third joint in each chain",
-    default=0.5,
+    default=0.7,  # Increased for more damping
     min=0.0,
     max=1.0
+)
+
+bpy.types.Scene.vrm_jiggle_subdivision_factor = bpy.props.IntProperty(
+    name="Subdivision Factor",
+    description="Number of subdivision iterations for jiggle bone areas (0 for no subdivision)",
+    default=1,
+    min=0,
+    max=3
 )
 
 class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
@@ -212,8 +236,11 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
             bone_quantity = context.scene.vrm_jiggle_bone_quantity
             affect_radius = context.scene.vrm_jiggle_affect_radius
             stiffness = context.scene.vrm_jiggle_stiffness
+            angular_stiffness = context.scene.vrm_jiggle_angular_stiffness
+            max_angle = context.scene.vrm_jiggle_max_angle
             drag_force_first = context.scene.vrm_jiggle_drag_force_first
             drag_force_end = context.scene.vrm_jiggle_drag_force_end
+            subdivision_factor = context.scene.vrm_jiggle_subdivision_factor
 
             # Define bone pairs based on selection
             bone_pairs = {
@@ -311,13 +338,16 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
                         joint = new_spring.joints.add()
                         joint.node.bone_name = chain_bone_name
                         joint.stiffness = stiffness
+                        joint.angular_stiffness = angular_stiffness
+                        joint.max_angle = math.radians(max_angle)  # Convert degrees to radians
                         joint.gravity_dir = Vector((0.0, 0.0, -1.0))
                         joint.drag_force = drag_force_first if j < 2 else drag_force_end
 
-            # Create vertex groups and assign vertices
+            # Create vertex groups and assign vertices with distance-based weights
             bpy.context.view_layer.objects.active = mesh
             bpy.ops.object.mode_set(mode='OBJECT')  # Ensure object mode
             mesh_data = mesh.data
+            jiggle_vertex_groups = []  # Store created vertex groups for subdivision
 
             for jiggle_bone_name, head_pos in jiggle_bone_positions.items():
                 if jiggle_bone_name not in armature.data.bones:
@@ -326,6 +356,9 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
                 # Create vertex group (only for the first bone in the chain)
                 if jiggle_bone_name not in mesh.vertex_groups:
                     vg = mesh.vertex_groups.new(name=jiggle_bone_name)
+                    jiggle_vertex_groups.append(jiggle_bone_name)
+                else:
+                    jiggle_vertex_groups.append(jiggle_bone_name)
 
                 # Determine the parent bone
                 parent_bone = None
@@ -345,22 +378,89 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
 
                 # Find vertices in the parent bone's vertex group within the affect radius
                 selected_verts = []
+                weights = []
                 for v in mesh_data.vertices:
                     try:
                         parent_vg.weight(v.index)  # Check if vertex is in group
                         v_pos = mesh.matrix_world @ v.co
                         dist = (v_pos - head_pos).length
                         if dist < affect_radius:
+                            # Calculate weight based on distance (linear falloff)
+                            weight = 1.0 - (dist / affect_radius)
+                            weight = max(0.1, weight)  # Ensure minimum weight
                             selected_verts.append(v.index)
+                            weights.append(weight)
                     except RuntimeError:
                         continue  # Vertex not in parent vertex group
 
-                # Assign vertices to vertex group
+                # Assign vertices to vertex group with distance-based weights
                 if selected_verts:
                     self.report({'INFO'}, f"Selected {len(selected_verts)} vertices for {jiggle_bone_name}")
-                    vg.add(selected_verts, 1.0, 'REPLACE')
+                    for vert_idx, weight in zip(selected_verts, weights):
+                        vg.add([vert_idx], weight, 'REPLACE')
                 else:
                     self.report({'WARNING'}, f"No vertices selected for {jiggle_bone_name} in {parent_bone} group")
+
+            # Subdivide mesh in jiggle bone areas if subdivision_factor > 0
+            if subdivision_factor > 0 and jiggle_vertex_groups:
+                bpy.context.view_layer.objects.active = mesh
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_mode(type='VERT')
+                bpy.ops.mesh.select_all(action='DESELECT')
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Select vertices in all jiggle vertex groups
+                for vg_name in jiggle_vertex_groups:
+                    vg = mesh.vertex_groups.get(vg_name)
+                    if vg:
+                        for v in mesh_data.vertices:
+                            try:
+                                vg.weight(v.index)  # Check if vertex is in group
+                                v.select = True
+                            except RuntimeError:
+                                continue
+
+                # Subdivide selected vertices
+                bpy.ops.object.mode_set(mode='EDIT')
+                for _ in range(subdivision_factor):
+                    bpy.ops.mesh.subdivide(smoothness=0.0)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Reassign vertices to vertex groups to account for new vertices
+                for vg_name in jiggle_vertex_groups:
+                    vg = mesh.vertex_groups.get(vg_name)
+                    if not vg:
+                        continue
+                    parent_bone = None
+                    for bone in selected_bones:
+                        if bone in vg_name:
+                            parent_bone = bone
+                            break
+                    if not parent_bone:
+                        continue
+                    parent_vg = mesh.vertex_groups.get(parent_bone)
+                    if not parent_vg:
+                        continue
+                    head_pos = jiggle_bone_positions.get(vg_name)
+                    if not head_pos:
+                        continue
+                    selected_verts = []
+                    weights = []
+                    for v in mesh_data.vertices:
+                        try:
+                            parent_vg.weight(v.index)
+                            v_pos = mesh.matrix_world @ v.co
+                            dist = (v_pos - head_pos).length
+                            if dist < affect_radius:
+                                weight = 1.0 - (dist / affect_radius)
+                                weight = max(0.1, weight)  # Ensure minimum weight
+                                selected_verts.append(v.index)
+                                weights.append(weight)
+                        except RuntimeError:
+                            continue
+                    if selected_verts:
+                        for vert_idx, weight in zip(selected_verts, weights):
+                            vg.add([vert_idx], weight, 'REPLACE')
 
             self.report({'INFO'}, f"Jiggle bone chains for {bone_pair.lower().replace('_', ' ')} added successfully")
             return {'FINISHED'}
@@ -389,8 +489,11 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         layout.prop(context.scene, "vrm_jiggle_bone_quantity")
         layout.prop(context.scene, "vrm_jiggle_affect_radius")
         layout.prop(context.scene, "vrm_jiggle_stiffness")
+        layout.prop(context.scene, "vrm_jiggle_angular_stiffness")
+        layout.prop(context.scene, "vrm_jiggle_max_angle")
         layout.prop(context.scene, "vrm_jiggle_drag_force_first")
         layout.prop(context.scene, "vrm_jiggle_drag_force_end")
+        layout.prop(context.scene, "vrm_jiggle_subdivision_factor")
         layout.operator("vrm.add_jiggle_bones", icon='BONE_DATA')
 
 def register():
@@ -410,8 +513,11 @@ def unregister():
     del bpy.types.Scene.vrm_jiggle_bone_quantity
     del bpy.types.Scene.vrm_jiggle_affect_radius
     del bpy.types.Scene.vrm_jiggle_stiffness
+    del bpy.types.Scene.vrm_jiggle_angular_stiffness
+    del bpy.types.Scene.vrm_jiggle_max_angle
     del bpy.types.Scene.vrm_jiggle_drag_force_first
     del bpy.types.Scene.vrm_jiggle_drag_force_end
+    del bpy.types.Scene.vrm_jiggle_subdivision_factor
 
 if __name__ == "__main__":
     register()
