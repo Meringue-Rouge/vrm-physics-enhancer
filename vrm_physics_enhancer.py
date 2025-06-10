@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (3, 0, 0),
+    "blender": (3, 1, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -28,6 +28,31 @@ bpy.types.Scene.vrm_jiggle_bone_pair = bpy.props.EnumProperty(
         ('LOWER_ARM', "Lower Arm", "J_Bip_L_LowerArm and J_Bip_R_LowerArm"),
     ],
     default='UPPER_LEG'
+)
+
+# Define scene properties for Breast Physics Tweaker parameters
+bpy.types.Scene.vrm_breast_weight_increase = bpy.props.FloatProperty(
+    name="Weight Increase Factor",
+    description="Factor to increase weights for non-blue regions in J_Sec_L_Bust2 and J_Sec_R_Bust2",
+    default=1.5,
+    min=1.0,
+    max=3.0
+)
+
+bpy.types.Scene.vrm_breast_end_shrink_factor = bpy.props.FloatProperty(
+    name="End Shrink Factor",
+    description="Factor to shrink the influence area for J_Sec_L_Bust2_end and J_Sec_R_Bust2_end",
+    default=0.7,
+    min=0.1,
+    max=1.0
+)
+
+bpy.types.Scene.vrm_breast_end_weight_reduction = bpy.props.FloatProperty(
+    name="End Weight Reduction",
+    description="Factor to reduce overall weights for J_Sec_L_Bust2_end and J_Sec_R_Bust2_end",
+    default=0.5,
+    min=0.1,
+    max=1.0
 )
 
 bpy.types.Scene.vrm_jiggle_bone_quantity = bpy.props.IntProperty(
@@ -399,6 +424,116 @@ class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
                     spring.collider_groups.add().collider_group_name = "Breasts"
 
             self.report({'INFO'}, "Breast physics colliders added successfully")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error: {str(e)}")
+            return {'CANCELLED'}
+
+class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
+    """Tweaks breast physics by adjusting vertex group weights for J_Sec_L_Bust2 and J_Sec_R_Bust2, and creating adjusted _end groups"""
+    bl_idname = "vrm.breast_physics_tweaker"
+    bl_label = "Breast Physics Tweaker"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'MOD_PHYSICS'
+
+    def execute(self, context):
+        try:
+            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
+            mesh = next(obj for obj in armature.children if obj.type == 'MESH')
+            bpy.context.view_layer.objects.active = mesh
+            mesh_data = mesh.data
+
+            # Get user-defined parameters
+            weight_increase = context.scene.vrm_breast_weight_increase
+            end_shrink_factor = context.scene.vrm_breast_end_shrink_factor
+            end_weight_reduction = context.scene.vrm_breast_end_weight_reduction
+
+            # Define bones to process
+            bust_bones = ["J_Sec_L_Bust2", "J_Sec_R_Bust2"]
+            end_bone_names = ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]
+
+            # Create or get vertex groups for _end bones
+            for end_bone in end_bone_names:
+                if end_bone not in mesh.vertex_groups:
+                    mesh.vertex_groups.new(name=end_bone)
+                    self.report({'INFO'}, f"Created vertex group {end_bone}")
+
+            for bone_name, end_bone_name in zip(bust_bones, end_bone_names):
+                source_vg = mesh.vertex_groups.get(bone_name)
+                end_vg = mesh.vertex_groups.get(end_bone_name)
+
+                if not source_vg:
+                    self.report({'WARNING'}, f"Vertex group {bone_name} not found")
+                    continue
+                if not end_vg:
+                    self.report({'WARNING'}, f"Vertex group {end_bone_name} not found")
+                    continue
+
+                # Get bone position for distance calculation
+                bone = armature.data.bones.get(bone_name)
+                if not bone:
+                    self.report({'WARNING'}, f"Bone {bone_name} not found in armature")
+                    continue
+                bone_head = armature.matrix_world @ bone.head_local
+                bone_tail = armature.matrix_world @ bone.tail_local
+                bone_center = (bone_head + bone_tail) / 2
+
+                # Process vertices for source vertex group (increase non-blue weights)
+                selected_verts = []
+                increased_weights = []
+                for v in mesh_data.vertices:
+                    try:
+                        weight = source_vg.weight(v.index)
+                        if weight > 0.0 and weight < 0.2:  # Non-pure blue (assuming blue is low weight < 0.2)
+                            v_pos = mesh.matrix_world @ v.co
+                            dist = (v_pos - bone_center).length
+                            # Increase weight more at center, less at edges
+                            weight_factor = weight_increase - 0.5 * dist  # Gradient: user-defined at center, 1.0 at edges
+                            new_weight = weight * weight_factor
+                            new_weight = max(0.0, min(1.0, new_weight))
+                            if new_weight > 0.0:
+                                selected_verts.append(v.index)
+                                increased_weights.append(new_weight)
+                    except RuntimeError:
+                        continue
+
+                # Assign increased weights to source vertex group
+                if selected_verts:
+                    self.report({'INFO'}, f"Adjusted {len(selected_verts)} vertices for {bone_name}")
+                    for v_idx, weight in zip(selected_verts, increased_weights):
+                        source_vg.add([v_idx], weight, 'REPLACE')
+                else:
+                    self.report({'WARNING'}, f"No vertices adjusted for {bone_name}")
+
+                # Process vertices for _end vertex group (shrunk and reduced)
+                end_verts = []
+                end_weights = []
+                for v in mesh_data.vertices:
+                    try:
+                        weight = source_vg.weight(v.index)
+                        if weight > 0.0:
+                            v_pos = mesh.matrix_world @ v.co
+                            dist = (v_pos - bone_center).length
+                            # Shrink influence by user-defined factor
+                            if dist < 0.3:  # Base radius, adjust as needed
+                                # Apply shrink factor and reduce overall weight
+                                new_weight = weight * end_shrink_factor * end_weight_reduction
+                                new_weight = max(0.0, min(1.0, new_weight))
+                                if new_weight > 0.0:
+                                    end_verts.append(v.index)
+                                    end_weights.append(new_weight)
+                    except RuntimeError:
+                        continue
+
+                # Assign weights to _end vertex group
+                if end_verts:
+                    self.report({'INFO'}, f"Assigned {len(end_verts)} vertices to {end_bone_name}")
+                    for v_idx, weight in zip(end_verts, end_weights):
+                        end_vg.add([v_idx], weight, 'REPLACE')
+                else:
+                    self.report({'WARNING'}, f"No vertices assigned to {end_bone_name}")
+
+            self.report({'INFO'}, "Breast physics tweaked successfully")
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
@@ -1309,6 +1444,10 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         layout.label(text="Basics", icon='OUTLINER_OB_ARMATURE')
         basics_box = layout.box()
         basics_box.operator("vrm.add_breast_physics", icon='MOD_PHYSICS')
+        basics_box.operator("vrm.breast_physics_tweaker", icon='MOD_PHYSICS')
+        basics_box.prop(context.scene, "vrm_breast_weight_increase")
+        basics_box.prop(context.scene, "vrm_breast_end_shrink_factor")
+        basics_box.prop(context.scene, "vrm_breast_end_weight_reduction")
         basics_box.operator("vrm.add_long_hair_collider", icon='OUTLINER_OB_FORCE_FIELD')
         basics_box.operator("vrm.add_arm_hand_colliders", icon='VIEW_PAN')
 
@@ -1390,6 +1529,7 @@ def register():
     bpy.utils.register_class(VRM_OT_Add_Long_Dress_Collision)
     bpy.utils.register_class(VRM_OT_Improve_Long_Dress_Topology)
     bpy.utils.register_class(VRM_OT_Add_Jiggle_Bones)
+    bpy.utils.register_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
 
 def unregister():
@@ -1399,6 +1539,7 @@ def unregister():
     bpy.utils.unregister_class(VRM_OT_Add_Long_Dress_Collision)
     bpy.utils.unregister_class(VRM_OT_Improve_Long_Dress_Topology)
     bpy.utils.unregister_class(VRM_OT_Add_Jiggle_Bones)
+    bpy.utils.unregister_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.unregister_class(VRM_PT_Physics_Enhancer_Panel)
     del bpy.types.Scene.vrm_jiggle_bone_pair
     del bpy.types.Scene.vrm_jiggle_bone_quantity
@@ -1443,6 +1584,10 @@ def unregister():
     del bpy.types.Scene.vrm_skirt_angular_stiffness_third
     del bpy.types.Scene.vrm_skirt_angular_stiffness_fourth
     del bpy.types.Scene.vrm_dress_params_collapsed
+    del bpy.types.Scene.vrm_breast_weight_increase
+    del bpy.types.Scene.vrm_breast_end_shrink_factor
+    del bpy.types.Scene.vrm_breast_end_weight_reduction
+
 
 if __name__ == "__main__":
     register()
