@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (3, 1, 0),
+    "blender": (3, 0, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -1440,14 +1440,20 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
+        # Breast Physics Section
+        layout.label(text="Breast Physics", icon='MESH_CIRCLE')
+        breast_box = layout.box()
+        breast_box.operator("vrm.add_breast_physics", icon='MOD_PHYSICS')
+        breast_tweaker_box = breast_box.box()
+        breast_tweaker_box.label(text="Breast Physics Tweaker Settings:")
+        breast_tweaker_box.prop(context.scene, "vrm_breast_weight_increase")
+        breast_tweaker_box.prop(context.scene, "vrm_breast_end_shrink_factor")
+        breast_tweaker_box.prop(context.scene, "vrm_breast_end_weight_reduction")
+        breast_tweaker_box.operator("vrm.breast_physics_tweaker", icon='MOD_PHYSICS')
+
         # Basics Section
         layout.label(text="Basics", icon='OUTLINER_OB_ARMATURE')
         basics_box = layout.box()
-        basics_box.operator("vrm.add_breast_physics", icon='MOD_PHYSICS')
-        basics_box.operator("vrm.breast_physics_tweaker", icon='MOD_PHYSICS')
-        basics_box.prop(context.scene, "vrm_breast_weight_increase")
-        basics_box.prop(context.scene, "vrm_breast_end_shrink_factor")
-        basics_box.prop(context.scene, "vrm_breast_end_weight_reduction")
         basics_box.operator("vrm.add_long_hair_collider", icon='OUTLINER_OB_FORCE_FIELD')
         basics_box.operator("vrm.add_arm_hand_colliders", icon='VIEW_PAN')
 
@@ -1587,7 +1593,6 @@ def unregister():
     del bpy.types.Scene.vrm_breast_weight_increase
     del bpy.types.Scene.vrm_breast_end_shrink_factor
     del bpy.types.Scene.vrm_breast_end_weight_reduction
-
 
 if __name__ == "__main__":
     register()
