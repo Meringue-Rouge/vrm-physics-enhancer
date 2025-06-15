@@ -1,8 +1,21 @@
 # vrm-physics-enhancer
-![Capture d'écran 2025-02-24 121045](https://github.com/user-attachments/assets/609dfa29-9182-4fa2-b0cc-a7772ac95429)
 
-Adds physics colliders for bust, long hair, and arms/hands to VRoid VRM models.
+### VRoid Studioで作成されたVRM 1.0モデルのフィジックスを改善するための様々なツール群です。
 
-Now supports long dress physics creation and custom jiggle physics for thighs, hips, etc, although that one tends to get bad results quite often, so that's a BETA feature.
+### A suite of various tools to improve the physics of VRM 1.0 models made with VRoid Studio.
 
-You'll need the VRM add-on and a VRM 1.0 Model from VRoid Studio. This won't work for VRM 0.X models.
+![image](https://github.com/user-attachments/assets/1fa961bb-986f-4a5a-9bfe-f4adaf80426b)
+
+## Features
+- Breast/Hand Colliders: Adds colliders to the breasts and hands so that hair interacts better, and avoids some clipping.
+- Breast Physics Tweaker: Adds more/less jiggle to the jiggle physics and applies weight to the 2_end bones of the bust.
+- Long Dress Physics Tweaker: Adjusts the physics on long dresses that are generally longer than what VRoid was designed for, and makes them more tolerable.
+- Model Scale with Physics: Scale the model while retaining more of the physics intact. This isn't a 1:1 conversion but it's close enough.
+- Additional Jiggle Physics (BETA): Add jiggle physics to various bones. Your mileage will vary greatly, and often leads to ugly looking results.
+
+## 特徴
+- 胸と手のコライダー： 胸と手にコライダーを追加し、髪の毛の相互作用を良くし、いくつかのクリッピングを回避。
+- 胸の物理調整： ジグル物理にジグルの増減を追加し、バストの2_端のボーンにウェイトを適用。
+- ロングドレスの物理調整： 一般的にVRoidがデザインしたものより長いロングドレスの物理を調整し、より許容できるようにします。
+- 物理を使ったモデルのスケール： より多くの物理演算をそのままにモデルを拡大縮小します。 これは1:1変換ではありませんが、十分に近いです。
+- 追加ジグル・フィジックス (BETA)： 様々なボーンにジグル物理を追加。 走行距離は大きく異なり、しばしば醜い見た目の結果につながります。
