@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (3, 0, 0),
+    "blender": (4, 0, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -30,13 +30,21 @@ bpy.types.Scene.vrm_jiggle_bone_pair = bpy.props.EnumProperty(
     default='UPPER_LEG'
 )
 
+bpy.types.Scene.vrm_scale_factor = bpy.props.FloatProperty(
+    name="Scale Factor",
+    description="Factor to scale the model and adjust physics parameters",
+    default=20.0,
+    min=0.1,
+    max=100.0
+)
+
 # Define scene properties for Breast Physics Tweaker parameters
 bpy.types.Scene.vrm_breast_weight_increase = bpy.props.FloatProperty(
     name="Weight Increase Factor",
     description="Factor to increase weights for non-blue regions in J_Sec_L_Bust2 and J_Sec_R_Bust2",
     default=1.5,
     min=1.0,
-    max=3.0
+    max=10.0
 )
 
 bpy.types.Scene.vrm_breast_end_shrink_factor = bpy.props.FloatProperty(
@@ -389,6 +397,98 @@ bpy.types.Scene.vrm_dress_params_collapsed = bpy.props.BoolProperty(
     description="Show or hide advanced dress physics parameters",
     default=True
 )
+
+class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
+    """Scales the model and adjusts physics parameters for VRM models"""
+    bl_idname = "vrm.scale_model_physics"
+    bl_label = "Scale Model with Scaled Physics"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'MODIFIER'
+
+    def execute(self, context):
+        try:
+            # Get the selected armature
+            armature = bpy.context.object
+            if armature.type != 'ARMATURE':
+                self.report({'ERROR'}, "Selected object is not an armature")
+                return {'CANCELLED'}
+
+            # Get the scale factor from scene properties
+            scale_factor = context.scene.vrm_scale_factor
+            scale_factor_1_4 = scale_factor ** 1.4  # For stiffness and drag_force (others)
+            scale_factor_0_9 = scale_factor ** 0.9  # For stiffness (non-end bust)
+            scale_factor_0_8 = scale_factor ** 0.8  # For stiffness (end bust)
+            scale_factor_0_2 = scale_factor ** 0.2  # For drag_force (end bust)
+            scale_factor_0_001 = scale_factor ** 0.001  # For drag_force (non-end bust)
+
+            # Define bust joint names
+            bust_joints = [
+                "J_Sec_L_Bust1", "J_Sec_L_Bust2", "J_Sec_R_Bust1", "J_Sec_R_Bust2",
+                "J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"
+            ]
+
+            # Scale the armature
+            armature.scale = (scale_factor, scale_factor, scale_factor)
+
+            # Get VRM extension
+            vrm_extension = armature.data.vrm_addon_extension
+
+            # Adjust SpringBone settings for VRM 1.0
+            if hasattr(vrm_extension, 'spring_bone1') and hasattr(vrm_extension.spring_bone1, 'springs'):
+                for spring in vrm_extension.spring_bone1.springs:
+                    # Adjust joint properties
+                    if hasattr(spring, 'joints'):
+                        for joint in spring.joints:
+                            # Get joint name (if available)
+                            joint_name = getattr(joint.node, 'bone_name', None) if hasattr(joint, 'node') else None
+                            
+                            # Scale stiffness
+                            if hasattr(joint, 'stiffness'):
+                                if joint_name in ["J_Sec_L_Bust1", "J_Sec_L_Bust2", "J_Sec_R_Bust1", "J_Sec_R_Bust2"]:
+                                    joint.stiffness *= scale_factor_0_9  # S^0.9 for non-end bust
+                                elif joint_name in ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]:
+                                    joint.stiffness *= scale_factor_0_8  # S^0.8 for end bust
+                                else:
+                                    joint.stiffness *= scale_factor_1_4  # S^1.4 for others
+
+                            # Scale drag_force
+                            if hasattr(joint, 'drag_force'):
+                                if joint_name in ["J_Sec_L_Bust1", "J_Sec_L_Bust2", "J_Sec_R_Bust1", "J_Sec_R_Bust2"]:
+                                    joint.drag_force *= scale_factor_0_001  # S^0.001 for non-end bust
+                                elif joint_name in ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]:
+                                    joint.drag_force *= scale_factor_0_2  # S^0.2 for end bust
+                                else:
+                                    joint.drag_force *= scale_factor_1_4  # S^1.4 for others
+
+                            # Keep gravity_power unchanged
+                            if hasattr(joint, 'gravity_power'):
+                                pass  # No scaling
+
+                            # Scale hit_radius linearly
+                            if hasattr(joint, 'radius'):
+                                joint.radius *= scale_factor
+
+                    # Scale collider radii linearly
+                    if hasattr(spring, 'collider_groups'):
+                        for collider_group in spring.collider_groups:
+                            if hasattr(collider_group, 'colliders'):
+                                for collider_ref in collider_group.colliders:
+                                    # Find the actual collider in vrm_extension.spring_bone1.colliders
+                                    collider = next((c for c in vrm_extension.spring_bone1.colliders if c.node.bone_name == collider_ref.collider_name), None)
+                                    if collider:
+                                        if hasattr(collider.shape, 'sphere') and hasattr(collider.shape.sphere, 'radius'):
+                                            collider.shape.sphere.radius *= scale_factor
+                                        elif hasattr(collider.shape, 'capsule') and hasattr(collider.shape.capsule, 'radius'):
+                                            collider.shape.capsule.radius *= scale_factor
+
+            # Apply the scale to make it permanent
+            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+            self.report({'INFO'}, "Model scaled and physics settings adjusted successfully")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error: {str(e)}")
+            return {'CANCELLED'}
 
 class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
     """Adds breast physics colliders to VRM models"""
@@ -1498,6 +1598,12 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         topology_box.prop(context.scene, "vrm_dress_subdivision_smoothness")
         topology_box.operator("vrm.improve_long_dress_topology", icon='MESH_DATA')
 
+        # Scaling Section
+        layout.label(text="Scaling", icon='MODIFIER')
+        scaling_box = layout.box()
+        scaling_box.prop(context.scene, "vrm_scale_factor")
+        scaling_box.operator("vrm.scale_model_physics", icon='MODIFIER')
+
         # Jiggle Physics Section
         layout.label(text="Jiggle Physics", icon='BONE_DATA')
         jiggle_box = layout.box()
@@ -1536,6 +1642,7 @@ def register():
     bpy.utils.register_class(VRM_OT_Improve_Long_Dress_Topology)
     bpy.utils.register_class(VRM_OT_Add_Jiggle_Bones)
     bpy.utils.register_class(VRM_OT_Breast_Physics_Tweaker)
+    bpy.utils.register_class(VRM_OT_Scale_Model_Physics)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
 
 def unregister():
@@ -1546,6 +1653,7 @@ def unregister():
     bpy.utils.unregister_class(VRM_OT_Improve_Long_Dress_Topology)
     bpy.utils.unregister_class(VRM_OT_Add_Jiggle_Bones)
     bpy.utils.unregister_class(VRM_OT_Breast_Physics_Tweaker)
+    bpy.utils.unregister_class(VRM_OT_Scale_Model_Physics)
     bpy.utils.unregister_class(VRM_PT_Physics_Enhancer_Panel)
     del bpy.types.Scene.vrm_jiggle_bone_pair
     del bpy.types.Scene.vrm_jiggle_bone_quantity
@@ -1593,6 +1701,7 @@ def unregister():
     del bpy.types.Scene.vrm_breast_weight_increase
     del bpy.types.Scene.vrm_breast_end_shrink_factor
     del bpy.types.Scene.vrm_breast_end_weight_reduction
+    del bpy.types.Scene.vrm_scale_factor
 
 if __name__ == "__main__":
     register()
