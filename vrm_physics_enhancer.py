@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (5, 0, 0),
+    "blender": (5, 5, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -28,6 +28,15 @@ bpy.types.Scene.vrm_jiggle_bone_pair = bpy.props.EnumProperty(
         ('LOWER_ARM', "Lower Arm", "J_Bip_L_LowerArm and J_Bip_R_LowerArm"),
     ],
     default='UPPER_LEG'
+)
+
+# Add new scene property for gravity power
+bpy.types.Scene.vrm_breast_gravity_power = bpy.props.FloatProperty(
+    name="Gravity Power",
+    description="Gravity power for breast physics spring joints (third joint or end in 3-bone case)",
+    default=0.15,
+    min=0.0,
+    max=10.0
 )
 
 bpy.types.Scene.vrm_scale_factor = bpy.props.FloatProperty(
@@ -642,6 +651,7 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
             weight_increase = context.scene.vrm_breast_weight_increase
             end_shrink_factor = context.scene.vrm_breast_end_shrink_factor
             end_weight_reduction = context.scene.vrm_breast_end_weight_reduction
+            gravity_power = context.scene.vrm_breast_gravity_power
 
             # Create or get vertex groups for _end and _3 bones
             for end_bone in end_bone_names:
@@ -672,31 +682,59 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
                     side_end_bone = "J_Sec_L_Bust2_end" if is_left else "J_Sec_R_Bust2_end"
                     side_third_bone = "J_Sec_L_Bust3" if is_left else "J_Sec_R_Bust3"
 
-                    # Check if joints for end and third bones exist
+                    # Check if joints for bust, end, and third bones exist
+                    bust_joint_exists = any(joint.node.bone_name == side_bust_bone for joint in spring.joints)
                     end_joint_exists = any(joint.node.bone_name == side_end_bone for joint in spring.joints)
                     third_joint_exists = any(joint.node.bone_name == side_third_bone for joint in spring.joints)
 
-                    # Add end joint if not exists
+                    # Update or add bust joint
+                    if not bust_joint_exists:
+                        joint = spring.joints.add()
+                        joint.node.bone_name = side_bust_bone
+                        joint.stiffness = 0.9
+                        joint.drag_force = 0.25
+                        joint.radius = 0.06
+                        joint.gravity_power = gravity_power * (0.75 if bone_count == 3 else 0.5)
+                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
+                        self.report({'INFO'}, f"Added spring joint for {side_bust_bone} in {spring.vrm_name}")
+                    else:
+                        for joint in spring.joints:
+                            if joint.node.bone_name == side_bust_bone:
+                                joint.gravity_power = gravity_power * (0.75 if bone_count == 3 else 0.5)
+                                self.report({'INFO'}, f"Updated gravity_power for {side_bust_bone} in {spring.vrm_name} to {joint.gravity_power}")
+
+                    # Update or add end joint
                     if not end_joint_exists:
                         joint = spring.joints.add()
                         joint.node.bone_name = side_end_bone
                         joint.stiffness = 0.8
                         joint.drag_force = 0.2
                         joint.radius = 0.05
-                        joint.gravity_power = 0.1
+                        joint.gravity_power = gravity_power * (1.0 if bone_count == 3 else 0.75)
                         joint.gravity_dir = Vector((0.0, 0.0, -1.0))
                         self.report({'INFO'}, f"Added spring joint for {side_end_bone} in {spring.vrm_name}")
+                    else:
+                        for joint in spring.joints:
+                            if joint.node.bone_name == side_end_bone:
+                                joint.gravity_power = gravity_power * (1.0 if bone_count == 3 else 0.75)
+                                self.report({'INFO'}, f"Updated gravity_power for {side_end_bone} in {spring.vrm_name} to {joint.gravity_power}")
 
-                    # Add third joint if bone_count is 4 and not exists
-                    if bone_count == 4 and not third_joint_exists:
-                        joint = spring.joints.add()
-                        joint.node.bone_name = side_third_bone
-                        joint.stiffness = 0.7
-                        joint.drag_force = 0.15
-                        joint.radius = 0.04
-                        joint.gravity_power = 0.15
-                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
-                        self.report({'INFO'}, f"Added spring joint for {side_third_bone} in {spring.vrm_name}")
+                    # Update or add third joint if bone_count is 4
+                    if bone_count == 4:
+                        if not third_joint_exists:
+                            joint = spring.joints.add()
+                            joint.node.bone_name = side_third_bone
+                            joint.stiffness = 0.7
+                            joint.drag_force = 0.15
+                            joint.radius = 0.04
+                            joint.gravity_power = gravity_power
+                            joint.gravity_dir = Vector((0.0, 0.0, -1.0))
+                            self.report({'INFO'}, f"Added spring joint for {side_third_bone} in {spring.vrm_name}")
+                        else:
+                            for joint in spring.joints:
+                                if joint.node.bone_name == side_third_bone:
+                                    joint.gravity_power = gravity_power
+                                    self.report({'INFO'}, f"Updated gravity_power for {side_third_bone} in {spring.vrm_name} to {joint.gravity_power}")
 
             for bone_name, end_bone_name, third_bone_name in zip(bust_bones, end_bone_names, third_bone_names):
                 source_vg = mesh.vertex_groups.get(bone_name)
@@ -810,7 +848,6 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
             self.report({'ERROR'}, f"Error: {str(e)}")
             bpy.ops.object.mode_set(mode='OBJECT')
             return {'CANCELLED'}
-
 
 
 class VRM_OT_Add_Long_Hair_Collider(bpy.types.Operator):
@@ -1726,6 +1763,7 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         breast_tweaker_box.prop(context.scene, "vrm_breast_weight_increase")
         breast_tweaker_box.prop(context.scene, "vrm_breast_end_shrink_factor")
         breast_tweaker_box.prop(context.scene, "vrm_breast_end_weight_reduction")
+        breast_tweaker_box.prop(context.scene, "vrm_breast_gravity_power")
         breast_tweaker_box.operator("vrm.breast_physics_tweaker", icon='MOD_PHYSICS')
 
         # Basics Section
@@ -1822,6 +1860,13 @@ def register():
     bpy.utils.register_class(VRM_OT_Scale_Model_Physics)
     bpy.utils.register_class(VRM_OT_Set_Breast_Physics_Preset)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
+    bpy.types.Scene.vrm_breast_gravity_power = bpy.props.FloatProperty(
+        name="Gravity Power",
+        description="Gravity power for breast physics spring joints (third joint or end in 3-bone case)",
+        default=0.15,
+        min=0.0,
+        max=10.0
+    )
 
 def unregister():
     bpy.utils.unregister_class(VRM_OT_Add_Breast_Physics_Colliders)
@@ -1882,7 +1927,7 @@ def unregister():
     del bpy.types.Scene.vrm_breast_end_weight_reduction
     del bpy.types.Scene.vrm_breast_bone_count
     del bpy.types.Scene.vrm_breast_physics_preset
-    del bpy.types.Scene.vrm_scale_factor
+    del bpy.types.Scene.vrm_breast_gravity_power
 
 if __name__ == "__main__":
     register()
