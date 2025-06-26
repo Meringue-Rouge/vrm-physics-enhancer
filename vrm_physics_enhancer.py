@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (4, 0, 0),
+    "blender": (5, 0, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -398,6 +398,29 @@ bpy.types.Scene.vrm_dress_params_collapsed = bpy.props.BoolProperty(
     default=True
 )
 
+
+# Add new scene property for bone count
+bpy.types.Scene.vrm_breast_bone_count = bpy.props.EnumProperty(
+    name="Breast Bone Count",
+    description="Number of bones per breast for physics simulation",
+    items=[
+        ('3', "3 Bones (Default)", "Use 3 bones per breast (J_Sec_X_Bust2, _end)"),
+        ('4', "4 Bones (Advanced)", "Use 4 bones per breast (J_Sec_X_Bust2, _end, _3)"),
+    ],
+    default='3'
+)
+
+# Add new scene property for physics presets
+bpy.types.Scene.vrm_breast_physics_preset = bpy.props.EnumProperty(
+    name="Physics Preset",
+    description="Select a preset to adjust breast physics parameters",
+    items=[
+        ('DISCRETE', "Discrete", "Subtle physics with 3 bones"),
+        ('BOUNCY', "Bouncy", "Exaggerated physics with 4 bones"),
+    ],
+    default='DISCRETE'
+)
+
 class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
     """Scales the model and adjusts physics parameters for VRM models"""
     bl_idname = "vrm.scale_model_physics"
@@ -418,13 +441,15 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
             scale_factor_1_4 = scale_factor ** 1.4  # For stiffness and drag_force (others)
             scale_factor_0_9 = scale_factor ** 0.9  # For stiffness (non-end bust)
             scale_factor_0_8 = scale_factor ** 0.8  # For stiffness (end bust)
+            scale_factor_0_7 = scale_factor ** 0.7  # For stiffness (third bust)
             scale_factor_0_2 = scale_factor ** 0.2  # For drag_force (end bust)
+            scale_factor_0_1 = scale_factor ** 0.1  # For drag_force (third bust)
             scale_factor_0_001 = scale_factor ** 0.001  # For drag_force (non-end bust)
 
             # Define bust joint names
             bust_joints = [
                 "J_Sec_L_Bust1", "J_Sec_L_Bust2", "J_Sec_R_Bust1", "J_Sec_R_Bust2",
-                "J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"
+                "J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end", "J_Sec_L_Bust3", "J_Sec_R_Bust3"
             ]
 
             # Scale the armature
@@ -448,8 +473,10 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
                                     joint.stiffness *= scale_factor_0_9  # S^0.9 for non-end bust
                                 elif joint_name in ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]:
                                     joint.stiffness *= scale_factor_0_8  # S^0.8 for end bust
+                                elif joint_name in ["J_Sec_L_Bust3", "J_Sec_R_Bust3"]:
+                                    joint.stiffness *= scale_factor_0_7  # S^0.7 for third bust
                                 else:
-                                    joint.stiffness *= scale_factor_1_4  # S^1.4 for others
+                                    debacle.stiffness *= scale_factor_1_4  # S^1.4 for others
 
                             # Scale drag_force
                             if hasattr(joint, 'drag_force'):
@@ -457,6 +484,8 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
                                     joint.drag_force *= scale_factor_0_001  # S^0.001 for non-end bust
                                 elif joint_name in ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]:
                                     joint.drag_force *= scale_factor_0_2  # S^0.2 for end bust
+                                elif joint_name in ["J_Sec_L_Bust3", "J_Sec_R_Bust3"]:
+                                    joint.drag_force *= scale_factor_0_1  # S^0.1 for third bust
                                 else:
                                     joint.drag_force *= scale_factor_1_4  # S^1.4 for others
 
@@ -489,6 +518,28 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
             return {'CANCELLED'}
+
+class VRM_OT_Set_Breast_Physics_Preset(bpy.types.Operator):
+    """Sets breast physics parameters based on selected preset"""
+    bl_idname = "vrm.set_breast_physics_preset"
+    bl_label = "Apply Breast Physics Preset"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'PRESET'
+
+    def execute(self, context):
+        preset = context.scene.vrm_breast_physics_preset
+        if preset == 'DISCRETE':
+            context.scene.vrm_breast_weight_increase = 1.5
+            context.scene.vrm_breast_end_shrink_factor = 0.7
+            context.scene.vrm_breast_end_weight_reduction = 0.5
+            context.scene.vrm_breast_bone_count = '3'
+        elif preset == 'BOUNCY':
+            context.scene.vrm_breast_weight_increase = 6.0
+            context.scene.vrm_breast_end_shrink_factor = 0.9
+            context.scene.vrm_breast_end_weight_reduction = 0.8
+            context.scene.vrm_breast_bone_count = '4'
+        self.report({'INFO'}, f"Applied {preset} preset to breast physics parameters")
+        return {'FINISHED'}
 
 class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
     """Adds breast physics colliders to VRM models"""
@@ -530,7 +581,7 @@ class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
             return {'CANCELLED'}
 
 class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
-    """Tweaks breast physics by adjusting vertex group weights for J_Sec_L_Bust2 and J_Sec_R_Bust2, and creating adjusted _end groups"""
+    """Tweaks breast physics by adjusting vertex group weights for J_Sec_L_Bust2 and J_Sec_R_Bust2, and creating adjusted _end and optionally _3 groups"""
     bl_idname = "vrm.breast_physics_tweaker"
     bl_label = "Breast Physics Tweaker"
     bl_options = {'REGISTER', 'UNDO'}
@@ -540,6 +591,50 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
         try:
             armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
             mesh = next(obj for obj in armature.children if obj.type == 'MESH')
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode='EDIT')
+            edit_bones = armature.data.edit_bones
+
+            # Define bones to process
+            bust_bones = ["J_Sec_L_Bust2", "J_Sec_R_Bust2"]
+            end_bone_names = ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]
+            third_bone_names = ["J_Sec_L_Bust3", "J_Sec_R_Bust3"]
+            bone_count = int(context.scene.vrm_breast_bone_count)
+
+            # Add new end bones if they don't exist
+            for bust_bone, end_bone_name in zip(bust_bones, end_bone_names):
+                if end_bone_name not in edit_bones:
+                    source_bone = edit_bones.get(bust_bone)
+                    if not source_bone:
+                        self.report({'WARNING'}, f"Bone {bust_bone} not found")
+                        continue
+                    new_bone = edit_bones.new(end_bone_name)
+                    bone_length = source_bone.length
+                    direction = (source_bone.tail - source_bone.head).normalized()
+                    new_bone.head = source_bone.tail
+                    new_bone.tail = new_bone.head + bone_length * direction
+                    new_bone.parent = source_bone
+                    new_bone.use_deform = True
+                    self.report({'INFO'}, f"Created bone {end_bone_name}")
+
+            # Add new third bones if bone_count is 4
+            if bone_count == 4:
+                for end_bone_name, third_bone_name in zip(end_bone_names, third_bone_names):
+                    end_bone = edit_bones.get(end_bone_name)
+                    if not end_bone:
+                        self.report({'WARNING'}, f"Bone {end_bone_name} not found")
+                        continue
+                    if third_bone_name not in edit_bones:
+                        new_bone = edit_bones.new(third_bone_name)
+                        bone_length = end_bone.length
+                        direction = (end_bone.tail - end_bone.head).normalized()
+                        new_bone.head = end_bone.tail
+                        new_bone.tail = new_bone.head + bone_length * direction
+                        new_bone.parent = end_bone
+                        new_bone.use_deform = True
+                        self.report({'INFO'}, f"Created bone {third_bone_name}")
+
+            bpy.ops.object.mode_set(mode='OBJECT')
             bpy.context.view_layer.objects.active = mesh
             mesh_data = mesh.data
 
@@ -548,25 +643,74 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
             end_shrink_factor = context.scene.vrm_breast_end_shrink_factor
             end_weight_reduction = context.scene.vrm_breast_end_weight_reduction
 
-            # Define bones to process
-            bust_bones = ["J_Sec_L_Bust2", "J_Sec_R_Bust2"]
-            end_bone_names = ["J_Sec_L_Bust2_end", "J_Sec_R_Bust2_end"]
-
-            # Create or get vertex groups for _end bones
+            # Create or get vertex groups for _end and _3 bones
             for end_bone in end_bone_names:
                 if end_bone not in mesh.vertex_groups:
                     mesh.vertex_groups.new(name=end_bone)
                     self.report({'INFO'}, f"Created vertex group {end_bone}")
+            if bone_count == 4:
+                for third_bone in third_bone_names:
+                    if third_bone not in mesh.vertex_groups:
+                        mesh.vertex_groups.new(name=third_bone)
+                        self.report({'INFO'}, f"Created vertex group {third_bone}")
 
-            for bone_name, end_bone_name in zip(bust_bones, end_bone_names):
+            # Add or update spring bone settings for VRM
+            sb = armature.data.vrm_addon_extension.spring_bone1
+            for spring in sb.springs:
+                if any(b in spring.vrm_name for b in ["Bust", "Breast"]):
+                    # Determine the side of the spring (left or right)
+                    is_left = "L" in spring.vrm_name or any("J_Sec_L_Bust" in joint.node.bone_name for joint in spring.joints)
+                    is_right = "R" in spring.vrm_name or any("J_Sec_R_Bust" in joint.node.bone_name for joint in spring.joints)
+                    
+                    # Skip if spring side is ambiguous
+                    if not (is_left or is_right) or (is_left and is_right):
+                        self.report({'WARNING'}, f"Spring {spring.vrm_name} has ambiguous side, skipping joint assignment")
+                        continue
+
+                    # Select bones for this spring based on side
+                    side_bust_bone = "J_Sec_L_Bust2" if is_left else "J_Sec_R_Bust2"
+                    side_end_bone = "J_Sec_L_Bust2_end" if is_left else "J_Sec_R_Bust2_end"
+                    side_third_bone = "J_Sec_L_Bust3" if is_left else "J_Sec_R_Bust3"
+
+                    # Check if joints for end and third bones exist
+                    end_joint_exists = any(joint.node.bone_name == side_end_bone for joint in spring.joints)
+                    third_joint_exists = any(joint.node.bone_name == side_third_bone for joint in spring.joints)
+
+                    # Add end joint if not exists
+                    if not end_joint_exists:
+                        joint = spring.joints.add()
+                        joint.node.bone_name = side_end_bone
+                        joint.stiffness = 0.8
+                        joint.drag_force = 0.2
+                        joint.radius = 0.05
+                        joint.gravity_power = 0.1
+                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
+                        self.report({'INFO'}, f"Added spring joint for {side_end_bone} in {spring.vrm_name}")
+
+                    # Add third joint if bone_count is 4 and not exists
+                    if bone_count == 4 and not third_joint_exists:
+                        joint = spring.joints.add()
+                        joint.node.bone_name = side_third_bone
+                        joint.stiffness = 0.7
+                        joint.drag_force = 0.15
+                        joint.radius = 0.04
+                        joint.gravity_power = 0.15
+                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
+                        self.report({'INFO'}, f"Added spring joint for {side_third_bone} in {spring.vrm_name}")
+
+            for bone_name, end_bone_name, third_bone_name in zip(bust_bones, end_bone_names, third_bone_names):
                 source_vg = mesh.vertex_groups.get(bone_name)
                 end_vg = mesh.vertex_groups.get(end_bone_name)
+                third_vg = mesh.vertex_groups.get(third_bone_name) if bone_count == 4 else None
 
                 if not source_vg:
                     self.report({'WARNING'}, f"Vertex group {bone_name} not found")
                     continue
                 if not end_vg:
                     self.report({'WARNING'}, f"Vertex group {end_bone_name} not found")
+                    continue
+                if bone_count == 4 and not third_vg:
+                    self.report({'WARNING'}, f"Vertex group {third_bone_name} not found")
                     continue
 
                 # Get bone position for distance calculation
@@ -588,7 +732,7 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
                             v_pos = mesh.matrix_world @ v.co
                             dist = (v_pos - bone_center).length
                             # Increase weight more at center, less at edges
-                            weight_factor = weight_increase - 0.5 * dist  # Gradient: user-defined at center, 1.0 at edges
+                            weight_factor = weight_increase - 0.5 * dist
                             new_weight = weight * weight_factor
                             new_weight = max(0.0, min(1.0, new_weight))
                             if new_weight > 0.0:
@@ -615,8 +759,7 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
                             v_pos = mesh.matrix_world @ v.co
                             dist = (v_pos - bone_center).length
                             # Shrink influence by user-defined factor
-                            if dist < 0.3:  # Base radius, adjust as needed
-                                # Apply shrink factor and reduce overall weight
+                            if dist < 0.3:
                                 new_weight = weight * end_shrink_factor * end_weight_reduction
                                 new_weight = max(0.0, min(1.0, new_weight))
                                 if new_weight > 0.0:
@@ -633,11 +776,42 @@ class VRM_OT_Breast_Physics_Tweaker(bpy.types.Operator):
                 else:
                     self.report({'WARNING'}, f"No vertices assigned to {end_bone_name}")
 
-            self.report({'INFO'}, "Breast physics tweaked successfully")
+                # Process vertices for _3 vertex group (further shrunk and reduced) if bone_count is 4
+                if bone_count == 4:
+                    third_verts = []
+                    third_weights = []
+                    for v in mesh_data.vertices:
+                        try:
+                            weight = source_vg.weight(v.index)
+                            if weight > 0.0:
+                                v_pos = mesh.matrix_world @ v.co
+                                dist = (v_pos - bone_center).length
+                                # Further shrink influence for _3 (tighter radius, more reduction)
+                                if dist < 0.2:
+                                    new_weight = weight * end_shrink_factor * 0.5 * end_weight_reduction
+                                    new_weight = max(0.0, min(1.0, new_weight))
+                                    if new_weight > 0.0:
+                                        third_verts.append(v.index)
+                                        third_weights.append(new_weight)
+                        except RuntimeError:
+                            continue
+
+                    # Assign weights to _3 vertex group
+                    if third_verts:
+                        self.report({'INFO'}, f"Assigned {len(third_verts)} vertices to {third_bone_name}")
+                        for v_idx, weight in zip(third_verts, third_weights):
+                            third_vg.add([v_idx], weight, 'REPLACE')
+                    else:
+                        self.report({'WARNING'}, f"No vertices assigned to {third_bone_name}")
+
+            self.report({'INFO'}, f"Breast physics tweaked successfully with {bone_count} bones per breast")
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
+            bpy.ops.object.mode_set(mode='OBJECT')
             return {'CANCELLED'}
+
+
 
 class VRM_OT_Add_Long_Hair_Collider(bpy.types.Operator):
     """Adds a long hair body penetration prevention collider"""
@@ -1546,6 +1720,9 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         breast_box.operator("vrm.add_breast_physics", icon='MOD_PHYSICS')
         breast_tweaker_box = breast_box.box()
         breast_tweaker_box.label(text="Breast Physics Tweaker Settings:")
+        breast_tweaker_box.prop(context.scene, "vrm_breast_physics_preset")
+        breast_tweaker_box.operator("vrm.set_breast_physics_preset", icon='PRESET')
+        breast_tweaker_box.prop(context.scene, "vrm_breast_bone_count")
         breast_tweaker_box.prop(context.scene, "vrm_breast_weight_increase")
         breast_tweaker_box.prop(context.scene, "vrm_breast_end_shrink_factor")
         breast_tweaker_box.prop(context.scene, "vrm_breast_end_weight_reduction")
@@ -1643,6 +1820,7 @@ def register():
     bpy.utils.register_class(VRM_OT_Add_Jiggle_Bones)
     bpy.utils.register_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.register_class(VRM_OT_Scale_Model_Physics)
+    bpy.utils.register_class(VRM_OT_Set_Breast_Physics_Preset)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
 
 def unregister():
@@ -1654,6 +1832,7 @@ def unregister():
     bpy.utils.unregister_class(VRM_OT_Add_Jiggle_Bones)
     bpy.utils.unregister_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.unregister_class(VRM_OT_Scale_Model_Physics)
+    bpy.utils.unregister_class(VRM_OT_Set_Breast_Physics_Preset)
     bpy.utils.unregister_class(VRM_PT_Physics_Enhancer_Panel)
     del bpy.types.Scene.vrm_jiggle_bone_pair
     del bpy.types.Scene.vrm_jiggle_bone_quantity
@@ -1701,6 +1880,8 @@ def unregister():
     del bpy.types.Scene.vrm_breast_weight_increase
     del bpy.types.Scene.vrm_breast_end_shrink_factor
     del bpy.types.Scene.vrm_breast_end_weight_reduction
+    del bpy.types.Scene.vrm_breast_bone_count
+    del bpy.types.Scene.vrm_breast_physics_preset
     del bpy.types.Scene.vrm_scale_factor
 
 if __name__ == "__main__":
