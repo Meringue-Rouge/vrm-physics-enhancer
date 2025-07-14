@@ -485,7 +485,7 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
                                 elif joint_name in ["J_Sec_L_Bust3", "J_Sec_R_Bust3"]:
                                     joint.stiffness *= scale_factor_0_7  # S^0.7 for third bust
                                 else:
-                                    debacle.stiffness *= scale_factor_1_4  # S^1.4 for others
+                                    joint.stiffness *= scale_factor_1_4  # S^1.4 for others
 
                             # Scale drag_force
                             if hasattr(joint, 'drag_force'):
