@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (5, 5, 0),
+    "blender": (5, 5, 1),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
