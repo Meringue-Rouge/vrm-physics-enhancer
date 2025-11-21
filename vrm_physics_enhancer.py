@@ -4,7 +4,7 @@ import math
 
 bl_info = {
     "name": "VRM Physics Enhancer",
-    "blender": (5, 5, 1),
+    "blender": (5, 6, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
     "version": (2, 0),
@@ -110,6 +110,28 @@ bpy.types.Scene.vrm_jiggle_stiffness_third = bpy.props.FloatProperty(
     default=1.00,
     min=0.0,
     max=10.0
+)
+
+# Add new scene property for jiggle bone count
+bpy.types.Scene.vrm_jiggle_bone_count = bpy.props.EnumProperty(
+    name="Jiggle Bone Count",
+    description="Number of bones per jiggle chain for physics simulation",
+    items=[
+        ('3', "3 Bones (Default)", "Use 3 bones per jiggle chain"),
+        ('4', "4 Bones (Advanced)", "Use 4 bones per jiggle chain"),
+    ],
+    default='3'
+)
+
+# Add new scene property for jiggle physics presets
+bpy.types.Scene.vrm_jiggle_physics_preset = bpy.props.EnumProperty(
+    name="Jiggle Physics Preset",
+    description="Select a preset to adjust jiggle physics parameters",
+    items=[
+        ('DISCRETE', "Discrete", "Subtle physics with 3 bones"),
+        ('BOUNCY', "Bouncy", "Exaggerated physics with 4 bones"),
+    ],
+    default='DISCRETE'
 )
 
 bpy.types.Scene.vrm_jiggle_angular_stiffness_first = bpy.props.FloatProperty(
@@ -429,6 +451,52 @@ bpy.types.Scene.vrm_breast_physics_preset = bpy.props.EnumProperty(
     ],
     default='DISCRETE'
 )
+
+class VRM_OT_Set_Jiggle_Physics_Preset(bpy.types.Operator):
+    """Sets jiggle physics parameters based on selected preset for ripple effect"""
+    bl_idname = "vrm.set_jiggle_physics_preset"
+    bl_label = "Apply Jiggle Physics Preset"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'PRESET'
+
+    def execute(self, context):
+        preset = context.scene.vrm_jiggle_physics_preset
+        if preset == 'DISCRETE':
+            context.scene.vrm_jiggle_bone_quantity = 1
+            context.scene.vrm_jiggle_stiffness_first = 2.0  # Higher stiffness to maintain shape
+            context.scene.vrm_jiggle_stiffness_second = 1.5
+            context.scene.vrm_jiggle_stiffness_third = 1.0
+            context.scene.vrm_jiggle_angular_stiffness_first = 0.7
+            context.scene.vrm_jiggle_angular_stiffness_second = 0.5
+            context.scene.vrm_jiggle_angular_stiffness_third = 0.3
+            context.scene.vrm_jiggle_drag_force_first = 0.3   # Higher drag for stability
+            context.scene.vrm_jiggle_drag_force_second = 0.4
+            context.scene.vrm_jiggle_drag_force_third = 0.5
+            context.scene.vrm_jiggle_joint_radius_first = 0.03
+            context.scene.vrm_jiggle_joint_radius_second = 0.03
+            context.scene.vrm_jiggle_joint_radius_third = 0.02
+            context.scene.vrm_jiggle_gravity_power = 0.5      # Lower gravity for subtle ripples
+            context.scene.vrm_jiggle_affect_radius = 0.1      # Tighter radius for localized effect
+            context.scene.vrm_jiggle_bone_count = '3'
+        elif preset == 'BOUNCY':
+            context.scene.vrm_jiggle_bone_quantity = 1
+            context.scene.vrm_jiggle_stiffness_first = 1.5
+            context.scene.vrm_jiggle_stiffness_second = 1.2
+            context.scene.vrm_jiggle_stiffness_third = 0.8
+            context.scene.vrm_jiggle_angular_stiffness_first = 0.6
+            context.scene.vrm_jiggle_angular_stiffness_second = 0.4
+            context.scene.vrm_jiggle_angular_stiffness_third = 0.2
+            context.scene.vrm_jiggle_drag_force_first = 0.2
+            context.scene.vrm_jiggle_drag_force_second = 0.3
+            context.scene.vrm_jiggle_drag_force_third = 0.4
+            context.scene.vrm_jiggle_joint_radius_first = 0.04
+            context.scene.vrm_jiggle_joint_radius_second = 0.04
+            context.scene.vrm_jiggle_joint_radius_third = 0.03
+            context.scene.vrm_jiggle_gravity_power = 0.8
+            context.scene.vrm_jiggle_affect_radius = 0.15
+            context.scene.vrm_jiggle_bone_count = '4'
+        self.report({'INFO'}, f"Applied {preset} preset to jiggle physics parameters")
+        return {'FINISHED'}
 
 class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
     """Scales the model and adjusts physics parameters for VRM models"""
@@ -1412,41 +1480,30 @@ class VRM_OT_Improve_Long_Dress_Topology(bpy.types.Operator):
             return {'CANCELLED'}
 
 class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
-    """Adds jiggle bone chains to selected bones for VRM models and assigns vertex groups"""
+    """Adds separate bones for back gravity and side jiggle effects for VRM thigh physics"""
     bl_idname = "vrm.add_jiggle_bones"
     bl_label = "Add Jiggle Bones"
     bl_options = {'REGISTER', 'UNDO'}
-    bl_icon = 'BONE_DATA'
 
     def execute(self, context):
         try:
-            bone_pair = context.scene.vrm_jiggle_bone_pair
-            bone_quantity = context.scene.vrm_jiggle_bone_quantity
+            # Force selection to UPPER_LEG for thigh-specific jiggle
+            bone_pair = 'UPPER_LEG'
             affect_radius = context.scene.vrm_jiggle_affect_radius
-            stiffness_first = context.scene.vrm_jiggle_stiffness_first
-            stiffness_second = context.scene.vrm_jiggle_stiffness_second
-            stiffness_third = context.scene.vrm_jiggle_stiffness_third
-            angular_stiffness_first = context.scene.vrm_jiggle_angular_stiffness_first
-            angular_stiffness_second = context.scene.vrm_jiggle_angular_stiffness_second
-            angular_stiffness_third = context.scene.vrm_jiggle_angular_stiffness_third
+            stiffness_back = context.scene.vrm_jiggle_stiffness_first  # For back gravity
+            stiffness_side = context.scene.vrm_jiggle_stiffness_second  # For side jiggle
+            angular_stiffness_back = context.scene.vrm_jiggle_angular_stiffness_first
+            angular_stiffness_side = context.scene.vrm_jiggle_angular_stiffness_second
             max_angle = context.scene.vrm_jiggle_max_angle
-            drag_force_first = context.scene.vrm_jiggle_drag_force_first
-            drag_force_second = context.scene.vrm_jiggle_drag_force_second
-            drag_force_third = context.scene.vrm_jiggle_drag_force_third
-            joint_radius_first = context.scene.vrm_jiggle_joint_radius_first
-            joint_radius_second = context.scene.vrm_jiggle_joint_radius_second
-            joint_radius_third = context.scene.vrm_jiggle_joint_radius_third
+            drag_force_back = context.scene.vrm_jiggle_drag_force_first
+            drag_force_side = context.scene.vrm_jiggle_drag_force_second
+            joint_radius_back = context.scene.vrm_jiggle_joint_radius_first
+            joint_radius_side = context.scene.vrm_jiggle_joint_radius_second
             gravity_power = context.scene.vrm_jiggle_gravity_power
             subdivision_factor = context.scene.vrm_jiggle_subdivision_factor
 
             bone_pairs = {
                 'UPPER_LEG': ["J_Bip_L_UpperLeg", "J_Bip_R_UpperLeg"],
-                'LOWER_LEG': ["J_Bip_L_LowerLeg", "J_Bip_R_LowerLeg"],
-                'SPINE': ["J_Bip_C_Spine"],
-                'BUST': ["J_Bip_L_Bust", "J_Bip_R_Bust"],
-                'CHEST': ["J_Bip_C_Chest"],
-                'UPPER_ARM': ["J_Bip_L_UpperArm", "J_Bip_R_UpperArm"],
-                'LOWER_ARM': ["J_Bip_L_LowerArm", "J_Bip_R_LowerArm"],
             }
             selected_bones = bone_pairs.get(bone_pair, ["J_Bip_L_UpperLeg", "J_Bip_R_UpperLeg"])
             armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
@@ -1454,95 +1511,75 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
             bpy.context.view_layer.objects.active = armature
             bpy.ops.object.mode_set(mode='EDIT')
             edit_bones = armature.data.edit_bones
-            jiggle_length = 0.05
 
-            jiggle_bone_positions = {}
-            jiggle_bone_chains = {}
+            # Define bone names for back gravity and side jiggle
             for bone_name in selected_bones:
                 if bone_name not in edit_bones:
                     self.report({'WARNING'}, f"Bone {bone_name} not found in armature")
                     continue
-                bone = edit_bones[bone_name]
-                matrix = bone.matrix
-                length = bone.length
-                midpoint_local = Vector((0, length / 2, 0))
-                midpoint_world = matrix @ midpoint_local
-                directions = [Vector((0, 0, 1))]
+                source_bone = edit_bones[bone_name]
+                bone_length = source_bone.length
+                direction = (source_bone.tail - source_bone.head).normalized()
 
-                for i, direction in enumerate(directions[:bone_quantity]):
-                    head_local = midpoint_local + 0.05 * direction
-                    head_world = matrix @ head_local
-                    direction_world = matrix.to_3x3() @ direction
-                    chain_bones = []
-                    prev_bone = None
-                    for j in range(3):
-                        bone_suffix = f"_{i+1}" if j == 0 else f"_{i+1}_{j+1}"
-                        new_bone_name = f"Jiggle_{bone_name}{bone_suffix}"
-                        new_bone = edit_bones.new(new_bone_name)
-                        if j == 0:
-                            new_bone.head = head_world
-                            new_bone.tail = head_world + jiggle_length * direction_world
-                            new_bone.parent = bone
-                            jiggle_bone_positions[new_bone_name] = armature.matrix_world @ head_world
-                        else:
-                            new_bone.head = prev_bone.tail
-                            new_bone.tail = new_bone.head + jiggle_length * direction_world
-                            new_bone.parent = prev_bone
-                        chain_bones.append(new_bone_name)
-                        prev_bone = new_bone
-                    jiggle_bone_chains[f"Jiggle_{bone_name}_{i+1}"] = chain_bones
+                # Create back gravity bone (centered along the bone)
+                back_bone_name = f"Jiggle_{bone_name}_Back"
+                if back_bone_name not in edit_bones:
+                    back_bone = edit_bones.new(back_bone_name)
+                    back_bone.head = (source_bone.head + source_bone.tail) / 2
+                    back_bone.tail = back_bone.head + direction * (bone_length * 0.3)  # Short extension for back
+                    back_bone.parent = source_bone
+                    back_bone.use_deform = True
+                    self.report({'INFO'}, f"Created bone {back_bone_name}")
+
+                # Create left and right side jiggle bones (offset laterally)
+                side_bone_names = [f"Jiggle_{bone_name}_Left", f"Jiggle_{bone_name}_Right"]
+                for i, side_bone_name in enumerate(side_bone_names):
+                    if side_bone_name not in edit_bones:
+                        side_bone = edit_bones.new(side_bone_name)
+                        offset = Vector((0.1 if i == 0 else -0.1, 0, 0))  # Lateral offset
+                        side_bone.head = (source_bone.head + source_bone.tail) / 2 + offset
+                        side_bone.tail = side_bone.head + direction * (bone_length * 0.3)
+                        side_bone.parent = source_bone
+                        side_bone.use_deform = True
+                        self.report({'INFO'}, f"Created bone {side_bone_name}")
 
             bpy.ops.object.mode_set(mode='OBJECT')
             sb = armature.data.vrm_addon_extension.spring_bone1
+
+            # Add spring bone settings
             for bone_name in selected_bones:
-                for i in range(bone_quantity):
-                    jiggle_bone_name = f"Jiggle_{bone_name}_{i+1}"
-                    if jiggle_bone_name not in armature.data.bones:
-                        self.report({'WARNING'}, f"Jiggle bone {jiggle_bone_name} not created")
-                        continue
-                    if jiggle_bone_name not in jiggle_bone_chains:
-                        self.report({'WARNING'}, f"No chain found for {jiggle_bone_name}")
-                        continue
-                    new_spring = sb.springs.add()
-                    new_spring.vrm_name = f"{jiggle_bone_name}_Spring"
-                    for j, chain_bone_name in enumerate(jiggle_bone_chains[jiggle_bone_name]):
-                        joint = new_spring.joints.add()
-                        joint.node.bone_name = chain_bone_name
-                        if j == 0:
-                            joint.stiffness = stiffness_first
-                            joint.angular_stiffness = angular_stiffness_first
-                            joint.drag_force = drag_force_first
-                            joint.radius = joint_radius_first
-                        elif j == 1:
-                            joint.stiffness = stiffness_second
-                            joint.angular_stiffness = angular_stiffness_second
-                            joint.drag_force = drag_force_second
-                            joint.radius = joint_radius_second
-                        else:
-                            joint.stiffness = stiffness_third
-                            joint.angular_stiffness = angular_stiffness_third
-                            joint.drag_force = drag_force_third
-                            joint.radius = joint_radius_third
-                        joint.max_angle = math.radians(max_angle)
-                        joint.gravity_dir = Vector((0.0, 0.0, -1.0))
-                        joint.gravity_power = gravity_power
+                # Back gravity spring
+                back_spring = sb.springs.add()
+                back_spring.vrm_name = f"Jiggle_{bone_name}_Back_Spring"
+                joint = back_spring.joints.add()
+                joint.node.bone_name = f"Jiggle_{bone_name}_Back"
+                joint.stiffness = stiffness_back * 1.2
+                joint.angular_stiffness = angular_stiffness_back * 0.9
+                joint.drag_force = drag_force_back * 0.8
+                joint.radius = joint_radius_back * 1.0
+                joint.gravity_power = gravity_power * 0.8  # Gravity only on back
+                joint.gravity_dir = Vector((0.0, 0.0, -1.0))  # Downward gravity
+                joint.max_angle = math.radians(max_angle * 0.8)
 
+                # Side jiggle springs
+                for side_bone_name in [f"Jiggle_{bone_name}_Left", f"Jiggle_{bone_name}_Right"]:
+                    side_spring = sb.springs.add()
+                    side_spring.vrm_name = f"{side_bone_name}_Spring"
+                    joint = side_spring.joints.add()
+                    joint.node.bone_name = side_bone_name
+                    joint.stiffness = stiffness_side * 0.8
+                    joint.angular_stiffness = angular_stiffness_side * 0.7
+                    joint.drag_force = drag_force_side * 0.6
+                    joint.radius = joint_radius_side * 1.2
+                    joint.gravity_power = 0.0  # No gravity on sides
+                    joint.max_angle = math.radians(max_angle * 1.2)
+
+            # Vertex group assignment with localized effects
             bpy.context.view_layer.objects.active = mesh
-            bpy.ops.object.mode_set(mode='OBJECT')
             mesh_data = mesh.data
-            jiggle_vertex_groups = []
-            vertex_neighbors = [set() for _ in range(len(mesh_data.vertices))]
-            for edge in mesh_data.edges:
-                v0, v1 = edge.vertices
-                vertex_neighbors[v0].add(v1)
-                vertex_neighbors[v1].add(v0)
-
             hips_vg = mesh.vertex_groups.get("J_Bip_C_Hips")
-            if not hips_vg:
-                self.report({'WARNING'}, "Vertex group J_Bip_C_Hips not found")
-                hips_vertices = set()
-            else:
-                hips_vertices = set()
+            hips_vertices = set()
+            if hips_vg:
                 for v in mesh_data.vertices:
                     try:
                         weight = hips_vg.weight(v.index)
@@ -1550,6 +1587,12 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
                             hips_vertices.add(v.index)
                     except RuntimeError:
                         continue
+
+            vertex_neighbors = [set() for _ in range(len(mesh_data.vertices))]
+            for edge in mesh_data.edges:
+                v0, v1 = edge.vertices
+                vertex_neighbors[v0].add(v1)
+                vertex_neighbors[v1].add(v0)
 
             expanded_hips_vertices = set(hips_vertices)
             for _ in range(2):
@@ -1558,187 +1601,210 @@ class VRM_OT_Add_Jiggle_Bones(bpy.types.Operator):
                     new_selection.update(vertex_neighbors[v_idx])
                 expanded_hips_vertices = new_selection
 
-            for jiggle_bone_name, head_pos in jiggle_bone_positions.items():
-                if jiggle_bone_name not in armature.data.bones:
-                    self.report({'WARNING'}, f"Jiggle bone {jiggle_bone_name} not found in armature")
+            for bone_name in selected_bones:
+                bone = armature.data.bones.get(bone_name)
+                if not bone:
+                    self.report({'WARNING'}, f"Bone {bone_name} not found in armature")
                     continue
-                if jiggle_bone_name not in mesh.vertex_groups:
-                    vg = mesh.vertex_groups.new(name=jiggle_bone_name)
-                    jiggle_vertex_groups.append(jiggle_bone_name)
-                else:
-                    jiggle_vertex_groups.append(jiggle_bone_name)
-
-                parent_bone = None
-                for bone in selected_bones:
-                    if bone in jiggle_bone_name:
-                        parent_bone = bone
-                        break
-                if not parent_bone:
-                    self.report({'WARNING'}, f"Could not determine parent bone for {jiggle_bone_name}")
-                    continue
-
-                parent_vg = mesh.vertex_groups.get(parent_bone)
-                if not parent_vg:
-                    self.report({'WARNING'}, f"Vertex group {parent_bone} not found for {jiggle_bone_name}")
-                    continue
-
-                lower_leg_bone = parent_bone.replace("UpperLeg", "LowerLeg")
-                lower_leg_vg = mesh.vertex_groups.get(lower_leg_bone)
-
-                bone = armature.data.bones[parent_bone]
                 bone_head = armature.matrix_world @ bone.head_local
                 bone_tail = armature.matrix_world @ bone.tail_local
                 bone_length = (bone_tail - bone_head).length
-                bone_dir = (bone_tail - bone_head).normalized()
-                extended_length = bone_length * 1.2
+                bone_center = (bone_head + bone_tail) / 2
 
-                selected_verts = []
-                weights = []
+                # Select vertices in lower thigh for subdivision
+                thigh_verts = set()
                 for v in mesh_data.vertices:
-                    try:
-                        parent_weight = parent_vg.weight(v.index)
-                        if lower_leg_vg:
-                            try:
-                                lower_leg_weight = lower_leg_vg.weight(v.index)
-                                if lower_leg_weight > 0.1:
-                                    continue
-                            except RuntimeError:
-                                pass
+                    v_pos = mesh.matrix_world @ v.co
+                    dist_to_center = (v_pos - bone_center).length
+                    if dist_to_center < bone_length * 0.6:  # Lower 60% of thigh
+                        thigh_verts.add(v.index)
+
+                # Apply subdivision for retopology
+                if subdivision_factor > 0 and thigh_verts:
+                    bpy.ops.object.mode_set(mode='EDIT')
+                    bpy.ops.mesh.select_mode(type='VERT')
+                    bpy.ops.mesh.select_all(action='DESELECT')
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                    for v_idx in thigh_verts:
+                        mesh_data.vertices[v_idx].select = True
+                    bpy.ops.object.mode_set(mode='EDIT')
+                    for _ in range(subdivision_factor):
+                        bpy.ops.mesh.subdivide(smoothness=0.5)
+                    bpy.ops.mesh.select_all(action='DESELECT')
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                    self.report({'INFO'}, f"Subdivided lower thigh for {bone_name} {subdivision_factor} time(s)")
+
+                # Vertex groups for back gravity
+                back_vg = mesh.vertex_groups.get(f"Jiggle_{bone_name}_Back")
+                if not back_vg:
+                    back_vg = mesh.vertex_groups.new(name=f"Jiggle_{bone_name}_Back")
+                back_verts = []
+                back_weights = []
+                for v in mesh_data.vertices:
+                    if v.index in expanded_hips_vertices:
+                        continue
+                    v_pos = mesh.matrix_world @ v.co
+                    # Check if vertex is on the back (negative Y in local space, assuming Y is back)
+                    local_pos = armature.matrix_world.inverted() @ v_pos
+                    if local_pos.y < 0 and (v_pos - bone_center).length < affect_radius * 1.0:
+                        dist = abs(local_pos.y)
+                        weight = math.exp(-dist / (affect_radius * 0.5)) * 0.8
+                        weight = max(0.0, min(1.0, weight))
+                        if weight > 0.0:
+                            back_verts.append(v.index)
+                            back_weights.append(weight)
+                if back_verts:
+                    for v_idx, weight in zip(back_verts, back_weights):
+                        back_vg.add([v_idx], weight, 'REPLACE')
+                    bpy.context.object.vertex_groups.active = back_vg
+                    bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+                    bpy.context.object.data.use_paint_mask_vertex = True
+                    bpy.ops.object.vertex_group_smooth(group_select_mode='ACTIVE', factor=0.5, repeat=3, expand=0.0)
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                else:
+                    self.report({'WARNING'}, f"No vertices assigned to {back_vg.name}")
+
+                # Vertex groups for left and right side jiggle
+                for side in ['Left', 'Right']:
+                    side_vg = mesh.vertex_groups.get(f"Jiggle_{bone_name}_{side}")
+                    if not side_vg:
+                        side_vg = mesh.vertex_groups.new(name=f"Jiggle_{bone_name}_{side}")
+                    side_verts = []
+                    side_weights = []
+                    for v in mesh_data.vertices:
                         if v.index in expanded_hips_vertices:
                             continue
                         v_pos = mesh.matrix_world @ v.co
-                        vec_to_vertex = v_pos - bone_head
-                        t = vec_to_vertex.dot(bone_dir)
-                        closest_point = bone_head + t * bone_dir
-                        radial_dist = (v_pos - closest_point).length
-                        if radial_dist < affect_radius and 0 <= t <= extended_length:
-                            if t < 0:
-                                dist_above_head = -t
-                                weight = math.exp(-2.0 * dist_above_head / bone_length)
-                            else:
-                                normalized_t = t / extended_length
-                                weight = (1.0 - normalized_t) ** 1.0
-                            radial_weight = (1.0 - radial_dist / affect_radius) ** 1.0
-                            weight *= radial_weight
-                            weight *= 1.5
+                        local_pos = armature.matrix_world.inverted() @ v_pos
+                        if side == 'Left' and local_pos.x > 0 and abs(local_pos.y) < 0.1 and (v_pos - bone_center).length < affect_radius * 0.8:
+                            dist = local_pos.x
+                            weight = math.exp(-dist / (affect_radius * 0.4)) * 0.7
                             weight = max(0.0, min(1.0, weight))
                             if weight > 0.0:
-                                selected_verts.append(v.index)
-                                weights.append(weight)
-                    except RuntimeError:
-                        continue
+                                side_verts.append(v.index)
+                                side_weights.append(weight)
+                        elif side == 'Right' and local_pos.x < 0 and abs(local_pos.y) < 0.1 and (v_pos - bone_center).length < affect_radius * 0.8:
+                            dist = -local_pos.x
+                            weight = math.exp(-dist / (affect_radius * 0.4)) * 0.7
+                            weight = max(0.0, min(1.0, weight))
+                            if weight > 0.0:
+                                side_verts.append(v.index)
+                                side_weights.append(weight)
+                    if side_verts:
+                        for v_idx, weight in zip(side_verts, side_weights):
+                            side_vg.add([v_idx], weight, 'REPLACE')
+                        bpy.context.object.vertex_groups.active = side_vg
+                        bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+                        bpy.context.object.data.use_paint_mask_vertex = True
+                        bpy.ops.object.vertex_group_smooth(group_select_mode='ACTIVE', factor=0.5, repeat=3, expand=0.0)
+                        bpy.ops.object.mode_set(mode='OBJECT')
+                    else:
+                        self.report({'WARNING'}, f"No vertices assigned to {side_vg.name}")
 
-                if selected_verts:
-                    self.report({'INFO'}, f"Selected {len(selected_verts)} vertices for {jiggle_bone_name}")
-                    for vert_idx, weight in zip(selected_verts, weights):
-                        vg.add([vert_idx], weight, 'REPLACE')
-                else:
-                    self.report({'WARNING'}, f"No vertices selected for {jiggle_bone_name} in {parent_bone} group")
-
-            if subdivision_factor > 0 and jiggle_vertex_groups:
-                bpy.context.view_layer.objects.active = mesh
-                bpy.ops.object.mode_set(mode='EDIT')
-                bpy.ops.mesh.select_mode(type='VERT')
-                bpy.ops.mesh.select_all(action='DESELECT')
-                bpy.ops.object.mode_set(mode='OBJECT')
-                for vg_name in jiggle_vertex_groups:
-                    vg = mesh.vertex_groups.get(vg_name)
-                    if vg:
-                        for v in mesh_data.vertices:
-                            try:
-                                vg.weight(v.index)
-                                v.select = True
-                            except RuntimeError:
-                                continue
-                bpy.ops.object.mode_set(mode='EDIT')
-                for _ in range(subdivision_factor):
-                    bpy.ops.mesh.subdivide(smoothness=0.0)
-                bpy.ops.object.mode_set(mode='OBJECT')
-                vertex_neighbors = [set() for _ in range(len(mesh_data.vertices))]
-                for edge in mesh_data.edges:
-                    v0, v1 = edge.vertices
-                    vertex_neighbors[v0].add(v1)
-                    vertex_neighbors[v1].add(v0)
-                hips_vertices = set()
-                for v in mesh_data.vertices:
-                    try:
-                        weight = hips_vg.weight(v.index)
-                        if weight > 0.1:
-                            hips_vertices.add(v.index)
-                    except RuntimeError:
-                        continue
-                expanded_hips_vertices = set(hips_vertices)
-                for _ in range(2):
-                    new_selection = set(expanded_hips_vertices)
-                    for v_idx in expanded_hips_vertices:
-                        new_selection.update(vertex_neighbors[v_idx])
-                    expanded_hips_vertices = new_selection
-                for vg_name in jiggle_vertex_groups:
-                    vg = mesh.vertex_groups.get(vg_name)
-                    if not vg:
-                        continue
-                    parent_bone = None
-                    for bone in selected_bones:
-                        if bone in vg_name:
-                            parent_bone = bone
-                            break
-                    if not parent_bone:
-                        continue
-                    parent_vg = mesh.vertex_groups.get(parent_bone)
-                    if not parent_vg:
-                        continue
-                    lower_leg_bone = parent_bone.replace("UpperLeg", "LowerLeg")
-                    lower_leg_vg = mesh.vertex_groups.get(lower_leg_bone)
-                    bone = armature.data.bones[parent_bone]
-                    bone_head = armature.matrix_world @ bone.head_local
-                    bone_tail = armature.matrix_world @ bone.tail_local
-                    bone_length = (bone_tail - bone_head).length
-                    bone_dir = (bone_tail - bone_head).normalized()
-                    extended_length = bone_length * 1.2
-                    selected_verts = []
-                    weights = []
-                    for v in mesh_data.vertices:
-                        try:
-                            parent_vg.weight(v.index)
-                            if lower_leg_vg:
-                                try:
-                                    lower_leg_weight = lower_leg_vg.weight(v.index)
-                                    if lower_leg_weight > 0.1:
-                                        continue
-                                except RuntimeError:
-                                    pass
-                            if v.index in expanded_hips_vertices:
-                                continue
-                            v_pos = mesh.matrix_world @ v.co
-                            vec_to_vertex = v_pos - bone_head
-                            t = vec_to_vertex.dot(bone_dir)
-                            closest_point = bone_head + t * bone_dir
-                            radial_dist = (v_pos - closest_point).length
-                            if radial_dist < affect_radius and 0 <= t <= extended_length:
-                                if t < 0:
-                                    dist_above_head = -t
-                                    weight = math.exp(-2.0 * dist_above_head / bone_length)
-                                else:
-                                    normalized_t = t / extended_length
-                                    weight = (1.0 - normalized_t) ** 1.0
-                                radial_weight = (1.0 - radial_dist / affect_radius) ** 1.0
-                                weight *= radial_weight
-                                weight *= 1.5
-                                weight = max(0.0, min(1.0, weight))
-                                if weight > 0.0:
-                                    selected_verts.append(v.index)
-                                    weights.append(weight)
-                        except RuntimeError:
-                            continue
-                    if selected_verts:
-                        for vert_idx, weight in zip(selected_verts, weights):
-                            vg.add([vert_idx], weight, 'REPLACE')
-
-            self.report({'INFO'}, f"Jiggle bone chains for {bone_pair.lower().replace('_', ' ')} added successfully")
+            self.report({'INFO'}, f"Jiggle bones for thighs added with separate back gravity and side jiggle")
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
+            bpy.ops.object.mode_set(mode='OBJECT')
             return {'CANCELLED'}
+
+class VRM_OT_Breast_Blend_Shape_Scaler(bpy.types.Operator):
+    """Creates a shape key that flattens the breasts based on weight paints"""
+    bl_idname = "vrm.breast_blend_shape_scaler"
+    bl_label = "Breast Blend Shape Scaler"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_icon = 'SHAPEKEY_DATA'
+
+    def execute(self, context):
+        try:
+            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
+            mesh = next((obj for obj in armature.children if obj.type == 'MESH' and "J_Sec_L_Bust2" in obj.vertex_groups), None)
+            if not mesh:
+                self.report({'ERROR'}, "No mesh found with breast vertex groups")
+                return {'CANCELLED'}
+
+            # Find the armature modifier
+            arm_mod = next((mod for mod in mesh.modifiers if mod.type == 'ARMATURE' and mod.object == armature), None)
+            if not arm_mod:
+                self.report({'ERROR'}, "No armature modifier found on the mesh")
+                return {'CANCELLED'}
+            mod_name = arm_mod.name
+
+            # Add basis shape key if none exist
+            bpy.ops.object.select_all(action='DESELECT')
+            mesh.select_set(True)
+            bpy.context.view_layer.objects.active = mesh
+            bpy.ops.object.mode_set(mode='OBJECT')
+            if not mesh.data.shape_keys:
+                bpy.ops.object.shape_key_add(from_mix=False)  # Add Basis
+
+            # Select armature and enter pose mode
+            bpy.ops.object.select_all(action='DESELECT')
+            armature.select_set(True)
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode='POSE')
+
+            # Store initial scales
+            initial_scales = {bone.name: bone.scale.copy() for bone in armature.pose.bones}
+
+            # Define bust bones
+            sides = ['L', 'R']
+            bust_suffixes = ["Bust1", "Bust2", "Bust2_end", "Bust3"]
+            bust_bones = []
+            for side in sides:
+                for suffix in bust_suffixes:
+                    bone_name = f"J_Sec_{side}_{suffix}"
+                    if bone_name in armature.pose.bones:
+                        bust_bones.append(bone_name)
+
+            if not bust_bones:
+                self.report({'WARNING'}, "No bust bones found")
+                bpy.ops.object.mode_set(mode='OBJECT')
+                return {'CANCELLED'}
+
+            # Scale bust bones to flatten
+            for bone_name in bust_bones:
+                bone = armature.pose.bones[bone_name]
+                bone.scale = (1, 0, 1)
+
+            # Apply pose as shape key on mesh
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
+            mesh.select_set(True)
+            bpy.context.view_layer.objects.active = mesh
+            bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=False, modifier=mod_name)
+
+            # Rename the new shape key
+            if mesh.data.shape_keys:
+                new_key = mesh.data.shape_keys.key_blocks[-1]
+                new_key.name = "Breast_Flatten"
+                new_key.value = 1.0
+            else:
+                self.report({'WARNING'}, "Shape key not created")
+                return {'CANCELLED'}
+
+            # Re-add armature modifier
+            bpy.ops.object.modifier_add(type='ARMATURE')
+            new_mod = mesh.modifiers[-1]
+            new_mod.object = armature
+            new_mod.name = mod_name
+
+            # Reset bone scales
+            bpy.ops.object.select_all(action='DESELECT')
+            armature.select_set(True)
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode='POSE')
+            for bone_name in bust_bones:
+                armature.pose.bones[bone_name].scale = initial_scales[bone_name]
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            self.report({'INFO'}, "Breast flatten shape key added and set to max value")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error: {str(e)}")
+            bpy.ops.object.mode_set(mode='OBJECT')
+            return {'CANCELLED'}
+
 
 class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
     """Creates a panel for VRM Physics Enhancer"""
@@ -1765,6 +1831,7 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         breast_tweaker_box.prop(context.scene, "vrm_breast_end_weight_reduction")
         breast_tweaker_box.prop(context.scene, "vrm_breast_gravity_power")
         breast_tweaker_box.operator("vrm.breast_physics_tweaker", icon='MOD_PHYSICS')
+        breast_box.operator("vrm.breast_blend_shape_scaler", icon='SHAPEKEY_DATA')
 
         # Basics Section
         layout.label(text="Basics", icon='OUTLINER_OB_ARMATURE')
@@ -1823,12 +1890,14 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
         layout.label(text="Jiggle Physics", icon='BONE_DATA')
         jiggle_box = layout.box()
         jiggle_box.prop(context.scene, "vrm_jiggle_bone_pair")
+        jiggle_box.prop(context.scene, "vrm_jiggle_physics_preset")
+        jiggle_box.operator("vrm.set_jiggle_physics_preset", icon='PRESET')
+        jiggle_box.prop(context.scene, "vrm_jiggle_bone_count")
         jiggle_box.prop(context.scene, "vrm_jiggle_affect_radius")
         jiggle_box.prop(context.scene, "vrm_jiggle_params_collapsed", text="Show Parameters", icon='DOWNARROW_HLT' if not context.scene.vrm_jiggle_params_collapsed else 'RIGHTARROW')
         if not context.scene.vrm_jiggle_params_collapsed:
             jiggle_params_box = jiggle_box.box()
-            jiggle_params_box.prop(context.scene, "vrm_jiggle_bone_quantity")
-            jiggle_params_box.label(text="Stiffness Settings:")
+            jiggle_params_box.label(text="Jiggle Physics Settings:")
             jiggle_params_box.prop(context.scene, "vrm_jiggle_stiffness_first")
             jiggle_params_box.prop(context.scene, "vrm_jiggle_stiffness_second")
             jiggle_params_box.prop(context.scene, "vrm_jiggle_stiffness_third")
@@ -1849,6 +1918,7 @@ class VRM_PT_Physics_Enhancer_Panel(bpy.types.Panel):
             jiggle_params_box.prop(context.scene, "vrm_jiggle_subdivision_factor")
         jiggle_box.operator("vrm.add_jiggle_bones", icon='BONE_DATA')
 
+
 def register():
     bpy.utils.register_class(VRM_OT_Add_Breast_Physics_Colliders)
     bpy.utils.register_class(VRM_OT_Add_Long_Hair_Collider)
@@ -1859,6 +1929,8 @@ def register():
     bpy.utils.register_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.register_class(VRM_OT_Scale_Model_Physics)
     bpy.utils.register_class(VRM_OT_Set_Breast_Physics_Preset)
+    bpy.utils.register_class(VRM_OT_Set_Jiggle_Physics_Preset)
+    bpy.utils.register_class(VRM_OT_Breast_Blend_Shape_Scaler)
     bpy.utils.register_class(VRM_PT_Physics_Enhancer_Panel)
     bpy.types.Scene.vrm_breast_gravity_power = bpy.props.FloatProperty(
         name="Gravity Power",
@@ -1866,6 +1938,24 @@ def register():
         default=0.15,
         min=0.0,
         max=10.0
+    )
+    bpy.types.Scene.vrm_jiggle_bone_count = bpy.props.EnumProperty(
+        name="Jiggle Bone Count",
+        description="Number of bones per jiggle chain for physics simulation",
+        items=[
+            ('3', "3 Bones (Default)", "Use 3 bones per jiggle chain"),
+            ('4', "4 Bones (Advanced)", "Use 4 bones per jiggle chain"),
+        ],
+        default='3'
+    )
+    bpy.types.Scene.vrm_jiggle_physics_preset = bpy.props.EnumProperty(
+        name="Jiggle Physics Preset",
+        description="Select a preset to adjust jiggle physics parameters",
+        items=[
+            ('DISCRETE', "Discrete", "Subtle physics with 3 bones"),
+            ('BOUNCY', "Bouncy", "Exaggerated physics with 4 bones"),
+        ],
+        default='DISCRETE'
     )
 
 def unregister():
@@ -1878,6 +1968,8 @@ def unregister():
     bpy.utils.unregister_class(VRM_OT_Breast_Physics_Tweaker)
     bpy.utils.unregister_class(VRM_OT_Scale_Model_Physics)
     bpy.utils.unregister_class(VRM_OT_Set_Breast_Physics_Preset)
+    bpy.utils.unregister_class(VRM_OT_Set_Jiggle_Physics_Preset)
+    bpy.utils.unregister_class(VRM_OT_Breast_Blend_Shape_Scaler)
     bpy.utils.unregister_class(VRM_PT_Physics_Enhancer_Panel)
     del bpy.types.Scene.vrm_jiggle_bone_pair
     del bpy.types.Scene.vrm_jiggle_bone_quantity
@@ -1928,6 +2020,8 @@ def unregister():
     del bpy.types.Scene.vrm_breast_bone_count
     del bpy.types.Scene.vrm_breast_physics_preset
     del bpy.types.Scene.vrm_breast_gravity_power
+    del bpy.types.Scene.vrm_jiggle_bone_count
+    del bpy.types.Scene.vrm_jiggle_physics_preset
 
 if __name__ == "__main__":
     register()
