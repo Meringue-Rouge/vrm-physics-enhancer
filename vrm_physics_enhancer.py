@@ -1,18 +1,161 @@
 import bpy
 from mathutils import Vector
 import math
+import uuid
 
 bl_info = {
     "name": "VRM Physics Enhancer",
     "blender": (5, 6, 0),
     "category": "3D View",
     "author": "Meringue Rouge",
-    "version": (2, 0),
+    "version": (2, 1, 0),
     "location": "View3D > Sidebar > VRM Physics Enhancer",
-    "description": "Adds physics colliders and jiggle bones to VRM models",
+    "description": "Adds physics colliders and jiggle bones to VRM models. 2.1.0 binds SpringBone colliders via UUIDs for current VRM Add-on.",
     "warning": "",
-    "doc_url": "",
+    "doc_url": "https://github.com/Meringue-Rouge/vrm-physics-enhancer",
 }
+
+# ---------------------------------------------------------------------------
+# VRM SpringBone 1.0 helpers
+# Current VRM Add-on for Blender stores collider/group links as UUIDs, not
+# bone or group names. Raw CollectionProperty.add() also skips UUID + Empty
+# setup, which leaves empty UI slots and unselectable collider groups.
+# ---------------------------------------------------------------------------
+
+def _get_armature_object(context):
+    obj = getattr(context.view_layer.objects, "active", None)
+    if obj is not None and obj.type == "ARMATURE":
+        return obj
+    selected = [o for o in context.selected_objects if o.type == "ARMATURE"]
+    if selected:
+        return selected[0]
+    return next(o for o in bpy.data.objects if o.type == "ARMATURE")
+
+
+def _get_spring_bone(armature_obj):
+    return armature_obj.data.vrm_addon_extension.spring_bone1
+
+
+def _ensure_uuid(item):
+    current = getattr(item, "uuid", "")
+    if not current:
+        item.uuid = uuid.uuid4().hex
+    return item.uuid
+
+
+def _add_collider(sb, context, armature_obj):
+    if hasattr(sb, "add_collider"):
+        collider = sb.add_collider(context, armature_obj)
+    else:
+        collider = sb.colliders.add()
+        collider.uuid = uuid.uuid4().hex
+        if hasattr(sb, "active_collider_index"):
+            sb.active_collider_index = len(sb.colliders) - 1
+    _ensure_uuid(collider)
+    return collider
+
+
+def _configure_collider(collider, context, armature_obj, bone_name, shape="Sphere", radius=0.1, offset=(0.0, 0.0, 0.0), tail=None):
+    collider.node.bone_name = bone_name
+    shape_type = "Capsule" if str(shape).lower() == "capsule" else "Sphere"
+    if hasattr(collider, "shape_type"):
+        try:
+            collider.shape_type = shape_type
+        except TypeError:
+            collider.shape_type = shape_type.lower()
+    if shape_type == "Capsule":
+        collider.shape.capsule.radius = radius
+        collider.shape.capsule.offset = offset
+        if tail is not None:
+            collider.shape.capsule.tail = tail
+    else:
+        collider.shape.sphere.radius = radius
+        collider.shape.sphere.offset = offset
+    if hasattr(collider, "reset_bpy_object"):
+        collider.reset_bpy_object(context, armature_obj)
+    _ensure_uuid(collider)
+    return collider
+
+
+def _add_collider_group(sb, name):
+    existing = next((g for g in sb.collider_groups if g.vrm_name == name), None)
+    if existing is not None:
+        _ensure_uuid(existing)
+        if hasattr(sb, "active_collider_group_index"):
+            sb.active_collider_group_index = list(sb.collider_groups).index(existing)
+        return existing
+    if hasattr(sb, "add_collider_group"):
+        group = sb.add_collider_group()
+    else:
+        group = sb.collider_groups.add()
+        group.uuid = uuid.uuid4().hex
+        if hasattr(sb, "active_collider_group_index"):
+            sb.active_collider_group_index = len(sb.collider_groups) - 1
+    group.vrm_name = name
+    _ensure_uuid(group)
+    return group
+
+
+def _bind_collider_to_group(group, collider):
+    collider_uuid = _ensure_uuid(collider)
+    for ref in group.colliders:
+        if getattr(ref, "collider_uuid", "") == collider_uuid:
+            return ref
+    empty = next((ref for ref in group.colliders if not getattr(ref, "collider_uuid", "")), None)
+    if empty is not None:
+        ref = empty
+    elif hasattr(group, "add_collider"):
+        ref = group.add_collider()
+    else:
+        ref = group.colliders.add()
+    ref.collider_uuid = collider_uuid
+    if hasattr(group, "active_collider_index"):
+        group.active_collider_index = max(0, len(group.colliders) - 1)
+    return ref
+
+
+def _bind_group_to_spring(spring, group):
+    group_uuid = _ensure_uuid(group)
+    for ref in spring.collider_groups:
+        if getattr(ref, "collider_group_uuid", "") == group_uuid:
+            return ref
+    empty = next((ref for ref in spring.collider_groups if not getattr(ref, "collider_group_uuid", "")), None)
+    if empty is not None:
+        ref = empty
+    elif hasattr(spring, "add_collider_group"):
+        ref = spring.add_collider_group()
+    else:
+        ref = spring.collider_groups.add()
+    ref.collider_group_uuid = group_uuid
+    if hasattr(spring, "active_collider_group_index"):
+        spring.active_collider_group_index = max(0, len(spring.collider_groups) - 1)
+    return ref
+
+
+def _attach_group_to_named_springs(sb, group, match_fn):
+    attached = 0
+    for spring in sb.springs:
+        name = spring.vrm_name or ""
+        if match_fn(name):
+            _bind_group_to_spring(spring, group)
+            attached += 1
+    return attached
+
+
+def _resolve_collider(sb, collider_ref):
+    ref_uuid = getattr(collider_ref, "collider_uuid", "")
+    if ref_uuid:
+        for collider in sb.colliders:
+            if collider.uuid == ref_uuid:
+                return collider
+    ref_name = getattr(collider_ref, "collider_name", "")
+    if ref_name:
+        for collider in sb.colliders:
+            display = getattr(collider, "display_name", "")
+            bone = getattr(getattr(collider, "node", None), "bone_name", "")
+            if ref_name in {display, bone}:
+                return collider
+    return None
 
 # Define scene properties for Jiggle Bones parameters
 bpy.types.Scene.vrm_jiggle_bone_pair = bpy.props.EnumProperty(
@@ -574,18 +717,20 @@ class VRM_OT_Scale_Model_Physics(bpy.types.Operator):
                             if hasattr(joint, 'radius'):
                                 joint.radius *= scale_factor
 
-                    # Scale collider radii linearly
-                    if hasattr(spring, 'collider_groups'):
-                        for collider_group in spring.collider_groups:
-                            if hasattr(collider_group, 'colliders'):
-                                for collider_ref in collider_group.colliders:
-                                    # Find the actual collider in vrm_extension.spring_bone1.colliders
-                                    collider = next((c for c in vrm_extension.spring_bone1.colliders if c.node.bone_name == collider_ref.collider_name), None)
-                                    if collider:
-                                        if hasattr(collider.shape, 'sphere') and hasattr(collider.shape.sphere, 'radius'):
-                                            collider.shape.sphere.radius *= scale_factor
-                                        elif hasattr(collider.shape, 'capsule') and hasattr(collider.shape.capsule, 'radius'):
-                                            collider.shape.capsule.radius *= scale_factor
+                    # Scale collider radii linearly (done once below via UUID-aware lookup)
+                    pass
+
+                sb = vrm_extension.spring_bone1
+                scaled_ids = set()
+                for collider in sb.colliders:
+                    cid = getattr(collider, "uuid", None) or id(collider)
+                    if cid in scaled_ids:
+                        continue
+                    scaled_ids.add(cid)
+                    if hasattr(collider.shape, "sphere") and hasattr(collider.shape.sphere, "radius"):
+                        collider.shape.sphere.radius *= scale_factor
+                    if hasattr(collider.shape, "capsule") and hasattr(collider.shape.capsule, "radius"):
+                        collider.shape.capsule.radius *= scale_factor
 
             # Apply the scale to make it permanent
             bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
@@ -627,31 +772,34 @@ class VRM_OT_Add_Breast_Physics_Colliders(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
-            bpy.context.view_layer.objects.active = armature
-            sb = armature.data.vrm_addon_extension.spring_bone1
+            armature = _get_armature_object(context)
+            context.view_layer.objects.active = armature
+            sb = _get_spring_bone(armature)
 
-            left_collider = sb.colliders.add()
-            left_collider.node.bone_name = "J_Sec_L_Bust1"
-            left_collider.shape.sphere.radius = 0.07
-            left_collider.shape.sphere.offset = [-0.13, -0.052, 0.018]
+            left_collider = _add_collider(sb, context, armature)
+            _configure_collider(
+                left_collider, context, armature,
+                "J_Sec_L_Bust1", "Sphere", 0.07, [-0.13, -0.052, 0.018],
+            )
 
-            right_collider = sb.colliders.add()
-            right_collider.node.bone_name = "J_Sec_R_Bust1"
-            right_collider.shape.sphere.radius = 0.07
-            right_collider.shape.sphere.offset = [0.13, -0.052, 0.018]
+            right_collider = _add_collider(sb, context, armature)
+            _configure_collider(
+                right_collider, context, armature,
+                "J_Sec_R_Bust1", "Sphere", 0.07, [0.13, -0.052, 0.018],
+            )
 
-            new_group = sb.collider_groups.add()
-            new_group.vrm_name = "Breasts"
+            new_group = _add_collider_group(sb, "Breasts")
+            _bind_collider_to_group(new_group, left_collider)
+            _bind_collider_to_group(new_group, right_collider)
 
-            new_group.colliders.add().collider_name = "J_Sec_L_Bust1"
-            new_group.colliders.add().collider_name = "J_Sec_R_Bust1"
+            attached = _attach_group_to_named_springs(
+                sb, new_group, lambda name: "Hair" in name
+            )
 
-            for spring in sb.springs:
-                if "Hair" in spring.vrm_name:
-                    spring.collider_groups.add().collider_group_name = "Breasts"
-
-            self.report({'INFO'}, "Breast physics colliders added successfully")
+            self.report(
+                {'INFO'},
+                f"Breast physics colliders added and bound to {attached} hair spring(s)",
+            )
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
@@ -927,26 +1075,27 @@ class VRM_OT_Add_Long_Hair_Collider(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
-            bpy.context.view_layer.objects.active = armature
-            sb = armature.data.vrm_addon_extension.spring_bone1
+            armature = _get_armature_object(context)
+            context.view_layer.objects.active = armature
+            sb = _get_spring_bone(armature)
 
-            capsule_collider = sb.colliders.add()
-            capsule_collider.node.bone_name = "J_Bip_C_Chest"
-            capsule_collider.shape_type = "Capsule"
-            capsule_collider.shape.capsule.radius = 0.12
-            capsule_collider.shape.capsule.offset = [0.0, -0.08, 0.0]
-            capsule_collider.shape.capsule.tail = [0.0, 0.14, 0.0]
+            capsule_collider = _add_collider(sb, context, armature)
+            _configure_collider(
+                capsule_collider, context, armature,
+                "J_Bip_C_Chest", "Capsule", 0.12, [0.0, -0.08, 0.0], [0.0, 0.14, 0.0],
+            )
 
-            new_group = sb.collider_groups.add()
-            new_group.vrm_name = "LongHairHelper"
-            new_group.colliders.add().collider_name = "J_Bip_C_Chest"
+            new_group = _add_collider_group(sb, "LongHairHelper")
+            _bind_collider_to_group(new_group, capsule_collider)
 
-            for spring in sb.springs:
-                if "Hair" in spring.vrm_name:
-                    spring.collider_groups.add().collider_group_name = "LongHairHelper"
+            attached = _attach_group_to_named_springs(
+                sb, new_group, lambda name: "Hair" in name
+            )
 
-            self.report({'INFO'}, "Long Hair Body Penetration Prevention added successfully")
+            self.report(
+                {'INFO'},
+                f"Long Hair helper collider added and bound to {attached} hair spring(s)",
+            )
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
@@ -961,9 +1110,9 @@ class VRM_OT_Add_Arm_Hand_Colliders(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            armature = next(obj for obj in bpy.data.objects if obj.type == 'ARMATURE')
-            bpy.context.view_layer.objects.active = armature
-            sb = armature.data.vrm_addon_extension.spring_bone1
+            armature = _get_armature_object(context)
+            context.view_layer.objects.active = armature
+            sb = _get_spring_bone(armature)
 
             arm_colliders = [
                 ("J_Bip_L_UpperArm", "Capsule", 0.043, [0, 0, 0], [0, 0.2, 0]),
@@ -974,34 +1123,28 @@ class VRM_OT_Add_Arm_Hand_Colliders(bpy.types.Operator):
                 ("J_Bip_R_Hand", "Sphere", 0.054, [0.000003, 0.08, 0], None),
             ]
 
-            left_group = sb.collider_groups.add()
-            left_group.vrm_name = "LeftArmColliders"
-            right_group = sb.collider_groups.add()
-            right_group.vrm_name = "RightArmColliders"
+            left_group = _add_collider_group(sb, "LeftArmColliders")
+            right_group = _add_collider_group(sb, "RightArmColliders")
 
             for bone, shape, radius, offset, tail in arm_colliders:
-                collider = sb.colliders.add()
-                collider.node.bone_name = bone
-
-                if shape == "Capsule":
-                    collider.shape.capsule.radius = radius
-                    collider.shape.capsule.offset = offset
-                    collider.shape.capsule.tail = tail
-                else:
-                    collider.shape.sphere.radius = radius
-                    collider.shape.sphere.offset = offset
-
+                collider = _add_collider(sb, context, armature)
+                _configure_collider(collider, context, armature, bone, shape, radius, offset, tail)
                 if "L_" in bone:
-                    left_group.colliders.add().collider_name = bone
+                    _bind_collider_to_group(left_group, collider)
                 else:
-                    right_group.colliders.add().collider_name = bone
+                    _bind_collider_to_group(right_group, collider)
 
+            attached = 0
             for spring in sb.springs:
-                if "Hair" in spring.vrm_name:
-                    spring.collider_groups.add().collider_group_name = "LeftArmColliders"
-                    spring.collider_groups.add().collider_group_name = "RightArmColliders"
+                if "Hair" in (spring.vrm_name or ""):
+                    _bind_group_to_spring(spring, left_group)
+                    _bind_group_to_spring(spring, right_group)
+                    attached += 1
 
-            self.report({'INFO'}, "Arms and hand colliders added successfully")
+            self.report(
+                {'INFO'},
+                f"Arm/hand colliders added and bound to {attached} hair spring(s)",
+            )
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Error: {str(e)}")
@@ -1037,62 +1180,60 @@ class VRM_OT_Add_Long_Dress_Collision(bpy.types.Operator):
 
             # Create or modify colliders for upper leg bones
             created_colliders = {bone: [] for bone in upper_leg_bones + lower_leg_bones + foot_bones}
+            created_groups = {}
             upper_leg_collider_radius = context.scene.vrm_upper_leg_collider_multiplier * context.scene.vrm_dress_collider_radius
             for bone in upper_leg_bones:
                 # Check for existing colliders
                 existing_colliders = [c for c in sb.colliders if c.node.bone_name == bone]
                 if existing_colliders:
                     for collider in existing_colliders:
-                        if collider.shape_type == "Sphere":
+                        if getattr(collider, "shape_type", "Sphere") in {"Sphere", "sphere"}:
                             collider.shape.sphere.radius *= context.scene.vrm_upper_leg_collider_multiplier
-                        elif collider.shape_type == "Capsule":
+                        elif getattr(collider, "shape_type", "") in {"Capsule", "capsule"}:
                             collider.shape.capsule.radius *= context.scene.vrm_upper_leg_collider_multiplier
-                        created_colliders[bone].append(collider.node.bone_name)
+                        created_colliders[bone].append(collider)
                         self.report({'INFO'}, f"Multiplied radius of existing collider for {bone} by {context.scene.vrm_upper_leg_collider_multiplier}")
                 else:
-                    # Create new sphere collider
-                    collider = sb.colliders.add()
-                    collider_name = f"{bone}_UpperLeg"
-                    collider.node.bone_name = bone
-                    collider.shape.sphere.radius = upper_leg_collider_radius
-                    collider.shape.sphere.offset = [0.0, 0.0, 0.0]  # Center at bone head
-                    created_colliders[bone].append(collider_name)
+                    collider = _add_collider(sb, context, armature)
+                    _configure_collider(
+                        collider, context, armature, bone, "Sphere",
+                        upper_leg_collider_radius, [0.0, 0.0, 0.0],
+                    )
+                    created_colliders[bone].append(collider)
                     self.report({'INFO'}, f"Created new collider for {bone} with radius {upper_leg_collider_radius}")
 
             # Create colliders for lower leg bones
             for bone in lower_leg_bones:
                 for config in collider_configs:
-                    collider = sb.colliders.add()
-                    collider_name = f"{bone}{config['suffix']}"
-                    collider.node.bone_name = bone
-                    collider.shape.sphere.radius = context.scene.vrm_dress_collider_radius
-                    collider.shape.sphere.offset = config['offset']
-                    created_colliders[bone].append(collider_name)
+                    collider = _add_collider(sb, context, armature)
+                    _configure_collider(
+                        collider, context, armature, bone, "Sphere",
+                        context.scene.vrm_dress_collider_radius, config['offset'],
+                    )
+                    created_colliders[bone].append(collider)
 
             # Create colliders for foot bones
             for bone in foot_bones:
                 for config in foot_collider_config:
-                    collider = sb.colliders.add()
-                    collider_name = f"{bone}{config['suffix']}"
-                    collider.node.bone_name = bone
-                    collider.shape.sphere.radius = context.scene.vrm_dress_collider_radius
-                    collider.shape.sphere.offset = config['offset']
-                    created_colliders[bone].append(collider_name)
+                    collider = _add_collider(sb, context, armature)
+                    _configure_collider(
+                        collider, context, armature, bone, "Sphere",
+                        context.scene.vrm_dress_collider_radius, config['offset'],
+                    )
+                    created_colliders[bone].append(collider)
 
-            # Create collider groups for each bone
+            # Create collider groups for each bone and bind by UUID
             for bone in upper_leg_bones + lower_leg_bones + foot_bones:
-                group = sb.collider_groups.add()
-                group.vrm_name = bone
-                for collider_name in created_colliders[bone]:
-                    group_collider = group.colliders.add()
-                    group_collider.collider_name = collider_name
+                group = _add_collider_group(sb, bone)
+                created_groups[bone] = group
+                for collider in created_colliders[bone]:
+                    _bind_collider_to_group(group, collider)
 
-            # Assign collider groups to springs containing "Skirt" but not "SkirtBack" in their name
+            # Assign collider groups to springs containing "Skirt" but not "SkirtBack"
             for spring in sb.springs:
-                if "Skirt" in spring.vrm_name and "SkirtBack" not in spring.vrm_name:
+                if "Skirt" in (spring.vrm_name or "") and "SkirtBack" not in (spring.vrm_name or ""):
                     for bone in upper_leg_bones + lower_leg_bones + foot_bones:
-                        collider_group = spring.collider_groups.add()
-                        collider_group.collider_group_name = bone
+                        _bind_group_to_spring(spring, created_groups[bone])
 
             # Update properties for Skirt Spring Bone Springs, excluding SkirtBack
             for spring in sb.springs:
